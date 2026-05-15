@@ -6,6 +6,7 @@ venv/
 env/
 
 *.html
+*.mat
 
 .DS_Store
 Thumbs.db

@@ -224,6 +224,27 @@ def _decode_chars(dset) -> str:
     return data.tobytes().decode("utf-8", "replace").replace("\x00", "")
 
 
+def _preview_ref_value(h5file, ref):
+    import h5py
+    try:
+        target = h5file[ref]
+    except Exception:
+        return ""
+    matlab_class = _attr_str(target, "MATLAB_class")
+    if isinstance(target, h5py.Dataset):
+        if matlab_class == "char":
+            return _decode_chars(target)
+        if target.size == 1 and target.dtype.kind in ("i", "u", "f"):
+            value = target[...].flat[0]
+            if target.dtype.kind == "f":
+                return float(value)
+            return int(value)
+        if target.dtype.kind in ("i", "u", "f") and target.size <= MAX_TABLE_PREVIEW_ROWS:
+            return ", ".join(str(x) for x in target[...].flatten())
+        return f"<{matlab_class or str(target.dtype)} {shape_str(tuple(reversed(target.shape)))}>"
+    return f"<{matlab_class or 'group'}>"
+
+
 def _find_mcos_refs(h5file):
     """Return the 1D array of refs from /#subsystem#/MCOS, or None."""
     import h5py
@@ -296,7 +317,7 @@ def _scan_mcos_table_blocks(h5file, mcos_refs):
 
 
 def _read_table_block(h5file, mcos_refs, block) -> TableData:
-    import numpy as np
+    import h5py, numpy as np
     name_refs = h5file[mcos_refs[block["names_idx"]]][...].flatten()
     data_refs = h5file[mcos_refs[block["data_idx"]]][...].flatten()
 
@@ -347,6 +368,12 @@ def _read_table_block(h5file, mcos_refs, block) -> TableData:
                     (complex(x).__repr__() if col_dset.dtype.kind == "c" else int(x))
                     for x in arr[:MAX_TABLE_PREVIEW_ROWS]
                 ]
+            elif col_dset.dtype == h5py.ref_dtype:
+                refs = col_dset[...].flatten()
+                values = [_preview_ref_value(h5file, ref) for ref in refs[:MAX_TABLE_PREVIEW_ROWS]]
+                first = values
+                dtype_str = "cellstr" if all(isinstance(v, str) for v in values) else "cell"
+                n_nan = sum(1 for v in values if v in ("", None))
             else:
                 first = [f"<{dtype_str}>"]
         except Exception as e:
