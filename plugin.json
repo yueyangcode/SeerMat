@@ -1,0 +1,22 @@
+{
+    "name": "mat-preview",
+    "version": "0.1.0",
+    "type": "convert",
+    "roles": [
+        "viewer"
+    ],
+    "entry": "entry.ps1",
+    "args": [
+        "-i",
+        "${input_file}",
+        "-o",
+        "${output_file}.html"
+    ],
+    "formats": [
+        "mat"
+    ],
+    "appMinVersion": "4.1.3",
+    "author": "you",
+    "description": "Preview MATLAB .mat files as HTML (variables summary).",
+    "releaseDate": "2026-05-14"
+}
