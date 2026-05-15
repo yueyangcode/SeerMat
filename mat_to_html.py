@@ -785,20 +785,21 @@ def render_html(input_file: str, kind: str, header: str, records: list[VarRecord
         depth = r.name.count(".")
         field_name = r.name.split(".")[-1]
         indent = f" style='padding-left:{12 + depth * 28}px'"
-        has_preview = bool(item_preview(r))
-        expander = "<span class='caret'>▸</span>" if has_preview else "<span class='spacer'></span>"
+        preview = item_preview(r)
+        has_preview = bool(preview)
+        is_open = " open" if has_preview and len(records) == 1 else ""
+        field_cell = (
+            f"<details class='inline-detail'{is_open}>"
+            f"<summary>{html.escape(field_name)}</summary>"
+            f"<div class='detail-content'>{preview}</div></details>"
+            if has_preview else
+            f"<span class='spacer'></span>{html.escape(field_name)}"
+        )
         row_parts.append(
-            f"<tr><td class='field'{indent}>{expander}{html.escape(field_name)}</td>"
+            f"<tr><td class='field'{indent}>{field_cell}</td>"
             f"<td class='value'>{html.escape(matlab_value(r))}</td>"
             f"<td>{html.escape(semantic_size(r))}</td>"
             f"<td>{html.escape(semantic_type(r))}</td></tr>"
-            )
-        if has_preview:
-            is_open = " open" if len(records) == 1 else ""
-            row_parts.append(
-                "<tr class='preview-row'><td></td><td colspan='3'>"
-                f"<details{is_open}><summary>预览</summary>{item_preview(r)}</details>"
-                "</td></tr>"
             )
     rows = "".join(row_parts)
     table_html = (
@@ -831,11 +832,11 @@ def render_html(input_file: str, kind: str, header: str, records: list[VarRecord
   th:nth-child(4), td:nth-child(4) {{ width:15%; }}
   .field {{ color:#2f2f2f; }}
   .value {{ color:#0b58a2; font-style:italic; }}
-  .caret, .spacer {{ display:inline-block; width:18px; color:#666; }}
-  .preview-row td {{ background:#fafafa; border-bottom:1px solid #d8d8d8; white-space:normal; overflow:visible; }}
-  details {{ max-width:100%; }}
-  details summary {{ cursor:pointer; color:#444; margin:2px 0 8px; }}
-  details[open] summary {{ margin-bottom:8px; }}
+  .spacer {{ display:inline-block; width:18px; }}
+  details.inline-detail {{ display:block; max-width:none; }}
+  details.inline-detail > summary {{ cursor:pointer; color:#333; list-style-position:outside; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }}
+  details.inline-detail > summary::marker {{ color:#666; font-size:11px; }}
+  .detail-content {{ margin:8px 0 4px 18px; max-width:calc(100vw - 80px); overflow:auto; color:#555; }}
   .preview {{ overflow:auto; max-width:100%; }}
   table.mini {{ margin:6px 0 12px; font-size:13px; table-layout:auto; width:auto; min-width:55%; }}
   table.mini th, table.mini td {{ padding:5px 10px; }}
