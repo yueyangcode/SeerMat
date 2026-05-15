@@ -58,6 +58,7 @@ class VarRecord:
     summary: str
     table_data: Optional[TableData] = None
     advanced: str = ""
+    preview_html: str = ""
 
 
 def human_bytes(n: float) -> str:
@@ -130,6 +131,60 @@ def scipy_summary(arr) -> str:
         return f"<summary error: {e}>"
 
 
+def _numeric_stats_from_array(arr, max_values: int = 20) -> tuple[str, list]:
+    import numpy as np
+    flat = arr.flatten()
+    if flat.size == 0:
+        return "empty", []
+    kind = arr.dtype.kind
+    values = [_format_scalar(x, kind) for x in flat[:max_values]]
+    if kind == "c":
+        mag = np.abs(flat)
+        finite = mag[np.isfinite(mag)]
+        if finite.size == 0:
+            return f"all non-finite, NaN {mag.size}", values
+        return (
+            f"|z| min {finite.min():.6g}, max {finite.max():.6g}, "
+            f"mean {finite.mean():.6g}, NaN {int(mag.size - finite.size)}",
+            values,
+        )
+    if kind == "f":
+        finite = flat[np.isfinite(flat)]
+        if finite.size == 0:
+            return f"all non-finite, NaN {flat.size}", values
+        return (
+            f"min {finite.min():.6g}, max {finite.max():.6g}, "
+            f"mean {finite.mean():.6g}, NaN {int(flat.size - finite.size)}",
+            values,
+        )
+    return (
+        f"min {flat.min():.6g}, max {flat.max():.6g}, "
+        f"mean {flat.mean():.6g}, NaN 0",
+        values,
+    )
+
+
+def _render_values_preview(values: list) -> str:
+    if not values:
+        return ""
+    rows = "".join(
+        f"<tr><td class='r'>{idx}</td><td>{html.escape(str(value))}</td></tr>"
+        for idx, value in enumerate(values, 1)
+    )
+    return (
+        "<table class='mini values'><thead><tr><th class='r'>#</th><th>value</th></tr></thead>"
+        f"<tbody>{rows}</tbody></table>"
+    )
+
+
+def _numeric_preview_html(shape: str, dtype: str, stats: str, values: list) -> str:
+    return (
+        f"<div class='submeta'>{html.escape(dtype)} | {html.escape(shape)} | "
+        f"{html.escape(stats)}</div>"
+        + _render_values_preview(values)
+    )
+
+
 def _is_opaque_struct(arr) -> bool:
     """scipy returns MATLAB opaque objects (table, datetime, …) as void
     arrays with dtype.names == ('s0','s1','s2','s3')."""
@@ -157,13 +212,26 @@ def _scipy_leaf_record(name: str, v) -> VarRecord:
             dtype="-", nbytes=int(v.nbytes),
             summary=f"(MATLAB {cls}, not expanded)",
         )
+    shape = shape_str(getattr(v, "shape", ()))
+    dtype = str(getattr(v, "dtype", type(v).__name__))
+    summary = scipy_summary(v)
+    preview_html = ""
+    if isinstance(v, np.ndarray) and v.dtype.kind in ("i", "u", "f", "c"):
+        stats, values = _numeric_stats_from_array(v)
+        summary = stats
+        preview_html = _numeric_preview_html(shape, dtype, stats, values)
+    elif isinstance(v, np.ndarray) and v.dtype.kind in ("U", "S"):
+        text = str(v.item() if v.size == 1 else " ".join(map(str, v.flatten()[:20])))
+        preview_html = f"<pre>{html.escape(text[:1000])}</pre>"
+
     return VarRecord(
         name=name,
         matlab_class=scipy_class_hint(v),
-        shape=shape_str(getattr(v, "shape", ())),
-        dtype=str(getattr(v, "dtype", type(v).__name__)),
+        shape=shape,
+        dtype=dtype,
         nbytes=int(getattr(v, "nbytes", 0)),
-        summary=scipy_summary(v),
+        summary=summary,
+        preview_html=preview_html,
     )
 
 
@@ -403,31 +471,28 @@ def _format_scalar(x, dtype_kind: str):
     return str(x)
 
 
-def _numeric_summary_and_preview(dset, max_values: int = 8) -> tuple[str, str]:
+def _numeric_summary_and_preview(dset, max_values: int = 20) -> tuple[str, list]:
     import numpy as np
     nbytes = int(dset.size) * dset.dtype.itemsize
     if nbytes > LARGE_SUMMARY_BYTES:
-        return f"(>{human_bytes(LARGE_SUMMARY_BYTES)}, stats skipped)", ""
+        return f"(>{human_bytes(LARGE_SUMMARY_BYTES)}, stats skipped)", []
 
     data = dset[...]
     flat = data.flatten()
     if flat.size == 0:
-        return "empty", ""
+        return "empty", []
 
     kind = dset.dtype.kind
-    preview = ", ".join(str(_format_scalar(x, kind)) for x in flat[:max_values])
-    if flat.size > max_values:
-        preview += ", ..."
+    preview = [_format_scalar(x, kind) for x in flat[:max_values]]
 
     if kind == "c":
         mag = np.abs(flat)
         finite = mag[np.isfinite(mag)]
         if finite.size == 0:
-            return f"all non-finite; first [{preview}]", preview
+            return "all non-finite", preview
         summary = (
             f"|z| min {finite.min():.6g}, max {finite.max():.6g}, "
-            f"mean {finite.mean():.6g}, NaN {int(mag.size - finite.size)}; "
-            f"first [{preview}]"
+            f"mean {finite.mean():.6g}, NaN {int(mag.size - finite.size)}"
         )
         return summary, preview
 
@@ -435,16 +500,16 @@ def _numeric_summary_and_preview(dset, max_values: int = 8) -> tuple[str, str]:
         finite = flat[np.isfinite(flat)]
         n_nan = int(flat.size - finite.size)
         if finite.size == 0:
-            return f"all non-finite; first [{preview}]", preview
+            return f"all non-finite, NaN {n_nan}", preview
         summary = (
             f"min {finite.min():.6g}, max {finite.max():.6g}, "
-            f"mean {finite.mean():.6g}, NaN {n_nan}; first [{preview}]"
+            f"mean {finite.mean():.6g}, NaN {n_nan}"
         )
         return summary, preview
 
     summary = (
         f"min {flat.min():.6g}, max {flat.max():.6g}, "
-        f"mean {flat.mean():.6g}, NaN 0; first [{preview}]"
+        f"mean {flat.mean():.6g}, NaN 0"
     )
     return summary, preview
 
@@ -509,7 +574,8 @@ def _h5_dataset_record(name: str, dset, mcos: Optional[_McosState] = None) -> Va
                 name=name, matlab_class="table",
                 shape=f"{td.n_rows}x{td.n_cols}",
                 dtype="mixed", nbytes=nbytes,
-                summary=f"{td.n_rows} rows × {td.n_cols} cols"
+                summary=", ".join(c.name for c in td.columns[:6])
+                        + (", ..." if td.n_cols > 6 else "")
                         + (" (uncertain)" if td.uncertain else ""),
                 table_data=td,
             )
@@ -534,12 +600,14 @@ def _h5_dataset_record(name: str, dset, mcos: Optional[_McosState] = None) -> Va
     dtype = str(dset.dtype)
 
     summary = ""
+    preview_html = ""
     try:
         if matlab_class == "char":
             # MATLAB char in v7.3: uint16 array, UTF-16LE codepoints
             if dset.dtype == np.uint16:
                 s = _decode_chars(dset)
                 summary = f'"{s[:80]}{"…" if len(s) > 80 else ""}"'
+                preview_html = f"<pre>{html.escape(s[:1000])}</pre>"
             else:
                 summary = "(char, non-uint16 encoding)"
         elif matlab_class == "logical":
@@ -549,7 +617,8 @@ def _h5_dataset_record(name: str, dset, mcos: Optional[_McosState] = None) -> Va
         elif is_sparse:
             summary = "sparse"
         elif dset.dtype.kind in ("i", "u", "f", "c"):
-            summary, _ = _numeric_summary_and_preview(dset)
+            summary, values = _numeric_summary_and_preview(dset)
+            preview_html = _numeric_preview_html(shape_str(shape_mat), dtype, summary, values)
     except Exception as e:
         summary = f"<summary error: {e}>"
 
@@ -561,6 +630,7 @@ def _h5_dataset_record(name: str, dset, mcos: Optional[_McosState] = None) -> Va
         nbytes=nbytes,
         summary=summary,
         advanced=f"HDF5 dtype={dset.dtype}, shape={tuple(dset.shape)}",
+        preview_html=preview_html,
     )
 
 
@@ -652,6 +722,7 @@ def render_html(input_file: str, kind: str, header: str, records: list[VarRecord
                 error: Optional[str], load_secs: float) -> str:
     file_name = os.path.basename(input_file)
     file_size = os.path.getsize(input_file) if os.path.exists(input_file) else 0
+    root_count = sum(1 for r in records if "." not in r.name)
 
     def render_table_preview(td: TableData) -> str:
         col_head = "".join(f"<th>{html.escape(c.name)}</th>" for c in td.columns)
@@ -675,7 +746,7 @@ def render_html(input_file: str, kind: str, header: str, records: list[VarRecord
         )
 
         return (
-            "<details class='preview' open><summary>table preview</summary>"
+            "<div class='preview'>"
             f"<div class='muted'>{td.n_rows} rows × {td.n_cols} columns; "
             f"showing up to {MAX_TABLE_PREVIEW_ROWS} rows and {MAX_TABLE_PREVIEW_COLS} columns.</div>"
             "<table class='mini'><thead><tr><th>column</th><th>dtype</th><th class='r'>rows</th>"
@@ -683,7 +754,7 @@ def render_html(input_file: str, kind: str, header: str, records: list[VarRecord
             f"<tbody>{col_rows}</tbody></table>"
             "<table class='mini'><thead><tr>" + col_head + "</tr></thead>"
             "<tbody>" + "".join(body_rows) + "</tbody></table>"
-            "</details>"
+            "</div>"
         )
 
     def render_advanced(r: VarRecord) -> str:
@@ -694,27 +765,64 @@ def render_html(input_file: str, kind: str, header: str, records: list[VarRecord
             f"<pre>{html.escape(r.advanced)}</pre></details>"
         )
 
+    def semantic_type(r: VarRecord) -> str:
+        return "table" if r.table_data is not None else r.matlab_class
+
+    def semantic_size(r: VarRecord) -> str:
+        if r.table_data is not None:
+            return f"{r.table_data.n_rows} × {r.table_data.n_cols}"
+        if r.matlab_class == "struct":
+            return r.shape.replace(" field(s)", " fields")
+        return r.shape
+
+    def detail_body(r: VarRecord) -> str:
+        chunks = []
+        if r.table_data is not None or not r.preview_html:
+            chunks.append(
+                f"<div class='submeta'>{html.escape(semantic_type(r))} | "
+                f"{html.escape(semantic_size(r))}</div>"
+            )
+        if r.table_data is not None:
+            chunks.append(render_table_preview(r.table_data))
+        elif r.preview_html:
+            chunks.append(r.preview_html)
+        elif r.matlab_class == "struct":
+            prefix = r.name + "."
+            children = [c for c in records if c.name.startswith(prefix) and "." not in c.name[len(prefix):]]
+            if children:
+                child_rows = "".join(
+                    f"<tr><td class='n'>{html.escape(c.name[len(prefix):])}</td>"
+                    f"<td>{html.escape(semantic_type(c))}</td>"
+                    f"<td>{html.escape(semantic_size(c))}</td>"
+                    f"<td>{html.escape(c.summary)}</td></tr>"
+                    for c in children
+                )
+                chunks.append(
+                    "<table class='mini'><thead><tr><th>field name</th><th>type</th>"
+                    "<th>size</th><th>summary</th></tr></thead>"
+                    f"<tbody>{child_rows}</tbody></table>"
+                )
+        chunks.append(render_advanced(r))
+        return "".join(chunks)
+
     row_parts = []
     for r in records:
+        depth = r.name.count(".")
+        display_name = ("&nbsp;" * 4 * depth) + html.escape(r.name)
+        is_open = " open" if depth == 0 or len(records) == 1 else ""
         row_parts.append(
-            f"<tr><td class='n'>{html.escape(r.name)}</td>"
-            f"<td>{html.escape(r.matlab_class)}</td>"
-            f"<td>{html.escape(r.shape)}</td>"
-            f"<td>{html.escape(r.dtype)}</td>"
-            f"<td class='r'>{human_bytes(r.nbytes)}</td>"
-            f"<td class='s'>{html.escape(r.summary)}{render_advanced(r)}</td></tr>"
-        )
-        if r.table_data is not None:
-            row_parts.append(
-                "<tr class='detail-row'><td></td><td colspan='5'>"
-                + render_table_preview(r.table_data)
-                + "</td></tr>"
+            f"<tr><td class='n'>{display_name}</td>"
+            f"<td>{html.escape(semantic_type(r))}</td>"
+            f"<td>{html.escape(semantic_size(r))}</td>"
+            f"<td class='s'>{html.escape(r.summary)}</td></tr>"
+            "<tr class='detail-row'><td></td><td colspan='3'>"
+            f"<details{is_open}><summary>Preview</summary>{detail_body(r)}</details>"
+            "</td></tr>"
             )
     rows = "".join(row_parts)
     table_html = (
         "<table><thead><tr>"
-        "<th>name</th><th>class</th><th>shape</th><th>dtype</th>"
-        "<th class='r'>bytes</th><th>summary</th>"
+        "<th>name</th><th>type</th><th>size</th><th>summary</th>"
         "</tr></thead><tbody>" + rows + "</tbody></table>"
         if records else "<p class='muted'>(no user variables)</p>"
     )
@@ -739,12 +847,15 @@ def render_html(input_file: str, kind: str, header: str, records: list[VarRecord
   td.r, th.r {{ text-align:right; font-variant-numeric:tabular-nums; }}
   td.s {{ color:#b5cea8; }}
   .detail-row td {{ background:#1b1b1b; padding-top:10px; padding-bottom:14px; }}
-  details.preview {{ color:#ddd; }}
-  details.preview summary, details.advanced summary {{ cursor:pointer; color:#9cdcfe; margin:4px 0 8px; }}
+  details summary {{ cursor:pointer; color:#9cdcfe; margin:4px 0 8px; }}
+  .preview {{ color:#ddd; }}
   details.advanced {{ margin-top:6px; color:#aaa; }}
   details.advanced pre {{ margin:6px 0 0; white-space:pre-wrap; color:#aaa; font-size:12px; }}
+  pre {{ margin:8px 0; white-space:pre-wrap; color:#ddd; }}
   table.mini {{ margin:8px 0 12px; font-size:12px; }}
   table.mini th, table.mini td {{ padding:5px 8px; }}
+  table.values {{ max-width:520px; }}
+  .submeta {{ color:#bbb; margin:4px 0 8px; }}
   .warn {{ background:#3a2a1f; color:#ffb86b; padding:10px 12px; border-radius:6px; margin:12px 0; font-size:13px; }}
   .warn pre {{ margin:6px 0 0 0; white-space:pre-wrap; color:#e6e6e6; }}
   .muted {{ color:#888; }}
@@ -755,7 +866,8 @@ def render_html(input_file: str, kind: str, header: str, records: list[VarRecord
     <b>size</b> {human_bytes(file_size)} &nbsp;·&nbsp;
     <b>mat</b> {html.escape(kind)} &nbsp;·&nbsp;
     <b>load</b> {load_secs*1000:.0f} ms &nbsp;·&nbsp;
-    <b>vars</b> {len(records)} &nbsp;·&nbsp;
+    <b>root vars</b> {root_count} &nbsp;·&nbsp;
+    <b>items</b> {len(records)} &nbsp;·&nbsp;
     <b>generated</b> {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
     {('<br><b>header</b> ' + html.escape(header)) if header else ''}
   </div>
