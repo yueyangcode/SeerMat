@@ -57,6 +57,7 @@ class VarRecord:
     nbytes: int
     summary: str
     table_data: Optional[TableData] = None
+    advanced: str = ""
 
 
 def human_bytes(n: float) -> str:
@@ -364,6 +365,63 @@ def _read_table_block(h5file, mcos_refs, block) -> TableData:
     )
 
 
+def _format_scalar(x, dtype_kind: str):
+    import numpy as np
+    if dtype_kind == "f":
+        return float(x) if np.isfinite(x) else "NaN"
+    if dtype_kind == "c":
+        return complex(x).__repr__()
+    if dtype_kind in ("i", "u"):
+        return int(x)
+    return str(x)
+
+
+def _numeric_summary_and_preview(dset, max_values: int = 8) -> tuple[str, str]:
+    import numpy as np
+    nbytes = int(dset.size) * dset.dtype.itemsize
+    if nbytes > LARGE_SUMMARY_BYTES:
+        return f"(>{human_bytes(LARGE_SUMMARY_BYTES)}, stats skipped)", ""
+
+    data = dset[...]
+    flat = data.flatten()
+    if flat.size == 0:
+        return "empty", ""
+
+    kind = dset.dtype.kind
+    preview = ", ".join(str(_format_scalar(x, kind)) for x in flat[:max_values])
+    if flat.size > max_values:
+        preview += ", ..."
+
+    if kind == "c":
+        mag = np.abs(flat)
+        finite = mag[np.isfinite(mag)]
+        if finite.size == 0:
+            return f"all non-finite; first [{preview}]", preview
+        summary = (
+            f"|z| min {finite.min():.6g}, max {finite.max():.6g}, "
+            f"mean {finite.mean():.6g}, NaN {int(mag.size - finite.size)}; "
+            f"first [{preview}]"
+        )
+        return summary, preview
+
+    if kind == "f":
+        finite = flat[np.isfinite(flat)]
+        n_nan = int(flat.size - finite.size)
+        if finite.size == 0:
+            return f"all non-finite; first [{preview}]", preview
+        summary = (
+            f"min {finite.min():.6g}, max {finite.max():.6g}, "
+            f"mean {finite.mean():.6g}, NaN {n_nan}; first [{preview}]"
+        )
+        return summary, preview
+
+    summary = (
+        f"min {flat.min():.6g}, max {flat.max():.6g}, "
+        f"mean {flat.mean():.6g}, NaN 0; first [{preview}]"
+    )
+    return summary, preview
+
+
 class _McosState:
     """Per-file MCOS resolution state. Two passes: collect k values, then decode."""
 
@@ -428,6 +486,12 @@ def _h5_dataset_record(name: str, dset, mcos: Optional[_McosState] = None) -> Va
                         + (" (uncertain)" if td.uncertain else ""),
                 table_data=td,
             )
+        return VarRecord(
+            name=name, matlab_class="table",
+            shape="(unresolved)", dtype="-", nbytes=nbytes,
+            summary="MATLAB table metadata found, but column data could not be decoded",
+            advanced=f"HDF5 dtype={dset.dtype}, shape={tuple(dset.shape)}",
+        )
 
     # Non-primitive MATLAB classes: opaque metadata header, not user data.
     if matlab_class not in KNOWN_MATLAB_CLASSES:
@@ -447,8 +511,7 @@ def _h5_dataset_record(name: str, dset, mcos: Optional[_McosState] = None) -> Va
         if matlab_class == "char":
             # MATLAB char in v7.3: uint16 array, UTF-16LE codepoints
             if dset.dtype == np.uint16:
-                data = dset[...]
-                s = data.tobytes().decode("utf-16-le", "replace").replace("\x00", "")
+                s = _decode_chars(dset)
                 summary = f'"{s[:80]}{"…" if len(s) > 80 else ""}"'
             else:
                 summary = "(char, non-uint16 encoding)"
@@ -459,18 +522,7 @@ def _h5_dataset_record(name: str, dset, mcos: Optional[_McosState] = None) -> Va
         elif is_sparse:
             summary = "sparse"
         elif dset.dtype.kind in ("i", "u", "f", "c"):
-            if nbytes > LARGE_SUMMARY_BYTES:
-                summary = f"(>{human_bytes(LARGE_SUMMARY_BYTES)}, range skipped)"
-            else:
-                data = dset[...]
-                if dset.dtype.kind == "c":
-                    summary = f"complex, |z| ~ [{np.abs(data).min():.4g}, {np.abs(data).max():.4g}]"
-                else:
-                    finite = data[np.isfinite(data)] if dset.dtype.kind == "f" else data
-                    if finite.size == 0:
-                        summary = "all non-finite"
-                    else:
-                        summary = f"range [{finite.min():.6g}, {finite.max():.6g}]"
+            summary, _ = _numeric_summary_and_preview(dset)
     except Exception as e:
         summary = f"<summary error: {e}>"
 
@@ -481,6 +533,7 @@ def _h5_dataset_record(name: str, dset, mcos: Optional[_McosState] = None) -> Va
         dtype=dtype,
         nbytes=nbytes,
         summary=summary,
+        advanced=f"HDF5 dtype={dset.dtype}, shape={tuple(dset.shape)}",
     )
 
 
@@ -573,15 +626,64 @@ def render_html(input_file: str, kind: str, header: str, records: list[VarRecord
     file_name = os.path.basename(input_file)
     file_size = os.path.getsize(input_file) if os.path.exists(input_file) else 0
 
-    rows = "".join(
-        f"<tr><td class='n'>{html.escape(r.name)}</td>"
-        f"<td>{html.escape(r.matlab_class)}</td>"
-        f"<td>{html.escape(r.shape)}</td>"
-        f"<td>{html.escape(r.dtype)}</td>"
-        f"<td class='r'>{human_bytes(r.nbytes)}</td>"
-        f"<td class='s'>{html.escape(r.summary)}</td></tr>"
-        for r in records
-    )
+    def render_table_preview(td: TableData) -> str:
+        col_head = "".join(f"<th>{html.escape(c.name)}</th>" for c in td.columns)
+        row_count = min(MAX_TABLE_PREVIEW_ROWS, max((len(c.first) for c in td.columns), default=0))
+        body_rows = []
+        for row_idx in range(row_count):
+            cells = []
+            for col in td.columns:
+                value = col.first[row_idx] if row_idx < len(col.first) else ""
+                cells.append(f"<td>{html.escape(str(value))}</td>")
+            body_rows.append("<tr>" + "".join(cells) + "</tr>")
+
+        col_rows = "".join(
+            f"<tr><td class='n'>{html.escape(c.name)}</td>"
+            f"<td>{html.escape(c.dtype)}</td>"
+            f"<td class='r'>{c.n_rows}</td>"
+            f"<td class='r'>{c.n_nan}</td>"
+            f"<td class='r'>{'' if c.vmin is None else f'{c.vmin:.6g}'}</td>"
+            f"<td class='r'>{'' if c.vmax is None else f'{c.vmax:.6g}'}</td></tr>"
+            for c in td.columns
+        )
+
+        return (
+            "<details class='preview' open><summary>table preview</summary>"
+            f"<div class='muted'>{td.n_rows} rows × {td.n_cols} columns; "
+            f"showing up to {MAX_TABLE_PREVIEW_ROWS} rows and {MAX_TABLE_PREVIEW_COLS} columns.</div>"
+            "<table class='mini'><thead><tr><th>column</th><th>dtype</th><th class='r'>rows</th>"
+            "<th class='r'>NaN</th><th class='r'>min</th><th class='r'>max</th></tr></thead>"
+            f"<tbody>{col_rows}</tbody></table>"
+            "<table class='mini'><thead><tr>" + col_head + "</tr></thead>"
+            "<tbody>" + "".join(body_rows) + "</tbody></table>"
+            "</details>"
+        )
+
+    def render_advanced(r: VarRecord) -> str:
+        if not r.advanced:
+            return ""
+        return (
+            "<details class='advanced'><summary>Advanced details</summary>"
+            f"<pre>{html.escape(r.advanced)}</pre></details>"
+        )
+
+    row_parts = []
+    for r in records:
+        row_parts.append(
+            f"<tr><td class='n'>{html.escape(r.name)}</td>"
+            f"<td>{html.escape(r.matlab_class)}</td>"
+            f"<td>{html.escape(r.shape)}</td>"
+            f"<td>{html.escape(r.dtype)}</td>"
+            f"<td class='r'>{human_bytes(r.nbytes)}</td>"
+            f"<td class='s'>{html.escape(r.summary)}{render_advanced(r)}</td></tr>"
+        )
+        if r.table_data is not None:
+            row_parts.append(
+                "<tr class='detail-row'><td></td><td colspan='5'>"
+                + render_table_preview(r.table_data)
+                + "</td></tr>"
+            )
+    rows = "".join(row_parts)
     table_html = (
         "<table><thead><tr>"
         "<th>name</th><th>class</th><th>shape</th><th>dtype</th>"
@@ -609,6 +711,13 @@ def render_html(input_file: str, kind: str, header: str, records: list[VarRecord
   td.n {{ color:#dcdcaa; }}
   td.r, th.r {{ text-align:right; font-variant-numeric:tabular-nums; }}
   td.s {{ color:#b5cea8; }}
+  .detail-row td {{ background:#1b1b1b; padding-top:10px; padding-bottom:14px; }}
+  details.preview {{ color:#ddd; }}
+  details.preview summary, details.advanced summary {{ cursor:pointer; color:#9cdcfe; margin:4px 0 8px; }}
+  details.advanced {{ margin-top:6px; color:#aaa; }}
+  details.advanced pre {{ margin:6px 0 0; white-space:pre-wrap; color:#aaa; font-size:12px; }}
+  table.mini {{ margin:8px 0 12px; font-size:12px; }}
+  table.mini th, table.mini td {{ padding:5px 8px; }}
   .warn {{ background:#3a2a1f; color:#ffb86b; padding:10px 12px; border-radius:6px; margin:12px 0; font-size:13px; }}
   .warn pre {{ margin:6px 0 0 0; white-space:pre-wrap; color:#e6e6e6; }}
   .muted {{ color:#888; }}
