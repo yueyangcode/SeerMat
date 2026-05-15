@@ -804,9 +804,11 @@ def render_html(input_file: str, kind: str, header: str, records: list[VarRecord
             f"<td>{html.escape(semantic_type(r))}</td></tr>"
             )
         if has_preview:
+            detail_pad = 12 + depth * 28 + 18
             row_parts.append(
                 f"<tr id='{detail_id}' class='detail-row{' open' if is_open else ''}'>"
-                f"<td></td><td colspan='3'><div class='detail-content'>{preview}</div></td></tr>"
+                f"<td colspan='4' style='padding-left:{detail_pad}px'>"
+                f"<div class='detail-content'>{preview}</div></td></tr>"
             )
     rows = "".join(row_parts)
     table_html = (
