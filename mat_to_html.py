@@ -762,6 +762,8 @@ def render_html(input_file: str, kind: str, header: str, records: list[VarRecord
     def semantic_size(r: VarRecord) -> str:
         if r.table_data is not None:
             return f"{r.table_data.n_rows} × {r.table_data.n_cols}"
+        if r.shape == "(opaque)":
+            return ""
         if r.matlab_class == "struct":
             return r.shape.replace(" field(s)", " fields")
         return r.shape
@@ -769,8 +771,10 @@ def render_html(input_file: str, kind: str, header: str, records: list[VarRecord
     def matlab_value(r: VarRecord) -> str:
         if r.table_data is not None:
             return f"{r.table_data.n_rows}×{r.table_data.n_cols} table"
+        if r.shape == "(opaque)":
+            return ""
         if r.matlab_class == "struct":
-            return f"1×1 struct"
+            return ""
         if r.matlab_class in ("char", "string"):
             return r.summary
         return f"{semantic_size(r)} {semantic_type(r)}"
