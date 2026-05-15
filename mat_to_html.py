@@ -187,17 +187,18 @@ def _numeric_preview_html(shape: str, dtype: str, stats: str, values: list) -> s
 
 def _is_opaque_struct(arr) -> bool:
     """scipy returns MATLAB opaque objects (table, datetime, …) as void
-    arrays with dtype.names == ('s0','s1','s2','s3')."""
-    return getattr(arr, "dtype", None) is not None and arr.dtype.names == ("s0", "s1", "s2", "s3")
+    arrays with internal fields like ('s0','s1','s2','arr')."""
+    names = getattr(getattr(arr, "dtype", None), "names", None)
+    return bool(names and len(names) >= 4 and names[0:3] == ("s0", "s1", "s2"))
 
 
 def _opaque_class_from_scipy(arr) -> str:
     try:
         s2 = arr.flatten()[0]["s2"]
-        if hasattr(s2, "tobytes"):
-            return s2.tobytes().decode("ascii", "replace").rstrip("\x00") or "opaque"
         if isinstance(s2, (bytes, bytearray)):
             return s2.decode("ascii", "replace").rstrip("\x00") or "opaque"
+        if hasattr(s2, "tobytes"):
+            return s2.tobytes().decode("ascii", "replace").rstrip("\x00") or "opaque"
         return str(s2)[:32] or "opaque"
     except Exception:
         return "opaque"
@@ -210,7 +211,7 @@ def _scipy_leaf_record(name: str, v) -> VarRecord:
         return VarRecord(
             name=name, matlab_class=cls, shape="(opaque)",
             dtype="-", nbytes=int(v.nbytes),
-            summary=f"(MATLAB {cls}, not expanded)",
+            summary=f"MATLAB {cls} object",
         )
     shape = shape_str(getattr(v, "shape", ()))
     dtype = str(getattr(v, "dtype", type(v).__name__))
@@ -736,7 +737,7 @@ def render_html(input_file: str, kind: str, header: str, records: list[VarRecord
             body_rows.append("<tr>" + "".join(cells) + "</tr>")
 
         col_rows = "".join(
-            f"<tr><td class='n'>{html.escape(c.name)}</td>"
+            f"<tr><td>{html.escape(c.name)}</td>"
             f"<td>{html.escape(c.dtype)}</td>"
             f"<td class='r'>{c.n_rows}</td>"
             f"<td class='r'>{c.n_nan}</td>"
@@ -747,22 +748,12 @@ def render_html(input_file: str, kind: str, header: str, records: list[VarRecord
 
         return (
             "<div class='preview'>"
-            f"<div class='muted'>{td.n_rows} rows × {td.n_cols} columns; "
-            f"showing up to {MAX_TABLE_PREVIEW_ROWS} rows and {MAX_TABLE_PREVIEW_COLS} columns.</div>"
-            "<table class='mini'><thead><tr><th>column</th><th>dtype</th><th class='r'>rows</th>"
-            "<th class='r'>NaN</th><th class='r'>min</th><th class='r'>max</th></tr></thead>"
+            "<table class='mini columns'><thead><tr><th>列</th><th>类型</th><th class='r'>行</th>"
+            "<th class='r'>NaN</th><th class='r'>最小</th><th class='r'>最大</th></tr></thead>"
             f"<tbody>{col_rows}</tbody></table>"
             "<table class='mini'><thead><tr>" + col_head + "</tr></thead>"
             "<tbody>" + "".join(body_rows) + "</tbody></table>"
             "</div>"
-        )
-
-    def render_advanced(r: VarRecord) -> str:
-        if not r.advanced:
-            return ""
-        return (
-            "<details class='advanced'><summary>Advanced details</summary>"
-            f"<pre>{html.escape(r.advanced)}</pre></details>"
         )
 
     def semantic_type(r: VarRecord) -> str:
@@ -775,54 +766,44 @@ def render_html(input_file: str, kind: str, header: str, records: list[VarRecord
             return r.shape.replace(" field(s)", " fields")
         return r.shape
 
-    def detail_body(r: VarRecord) -> str:
-        chunks = []
-        if r.table_data is not None or not r.preview_html:
-            chunks.append(
-                f"<div class='submeta'>{html.escape(semantic_type(r))} | "
-                f"{html.escape(semantic_size(r))}</div>"
-            )
+    def matlab_value(r: VarRecord) -> str:
         if r.table_data is not None:
-            chunks.append(render_table_preview(r.table_data))
-        elif r.preview_html:
-            chunks.append(r.preview_html)
-        elif r.matlab_class == "struct":
-            prefix = r.name + "."
-            children = [c for c in records if c.name.startswith(prefix) and "." not in c.name[len(prefix):]]
-            if children:
-                child_rows = "".join(
-                    f"<tr><td class='n'>{html.escape(c.name[len(prefix):])}</td>"
-                    f"<td>{html.escape(semantic_type(c))}</td>"
-                    f"<td>{html.escape(semantic_size(c))}</td>"
-                    f"<td>{html.escape(c.summary)}</td></tr>"
-                    for c in children
-                )
-                chunks.append(
-                    "<table class='mini'><thead><tr><th>field name</th><th>type</th>"
-                    "<th>size</th><th>summary</th></tr></thead>"
-                    f"<tbody>{child_rows}</tbody></table>"
-                )
-        chunks.append(render_advanced(r))
-        return "".join(chunks)
+            return f"{r.table_data.n_rows}×{r.table_data.n_cols} table"
+        if r.matlab_class == "struct":
+            return f"1×1 struct"
+        if r.matlab_class in ("char", "string"):
+            return r.summary
+        return f"{semantic_size(r)} {semantic_type(r)}"
+
+    def item_preview(r: VarRecord) -> str:
+        if r.table_data is not None:
+            return render_table_preview(r.table_data)
+        return r.preview_html
 
     row_parts = []
     for r in records:
         depth = r.name.count(".")
-        display_name = ("&nbsp;" * 4 * depth) + html.escape(r.name)
-        is_open = " open" if depth == 0 or len(records) == 1 else ""
+        field_name = r.name.split(".")[-1]
+        indent = f" style='padding-left:{12 + depth * 28}px'"
+        has_preview = bool(item_preview(r))
+        expander = "<span class='caret'>▸</span>" if has_preview else "<span class='spacer'></span>"
         row_parts.append(
-            f"<tr><td class='n'>{display_name}</td>"
-            f"<td>{html.escape(semantic_type(r))}</td>"
+            f"<tr><td class='field'{indent}>{expander}{html.escape(field_name)}</td>"
+            f"<td class='value'>{html.escape(matlab_value(r))}</td>"
             f"<td>{html.escape(semantic_size(r))}</td>"
-            f"<td class='s'>{html.escape(r.summary)}</td></tr>"
-            "<tr class='detail-row'><td></td><td colspan='3'>"
-            f"<details{is_open}><summary>Preview</summary>{detail_body(r)}</details>"
-            "</td></tr>"
+            f"<td>{html.escape(semantic_type(r))}</td></tr>"
+            )
+        if has_preview:
+            is_open = " open" if len(records) == 1 else ""
+            row_parts.append(
+                "<tr class='preview-row'><td></td><td colspan='3'>"
+                f"<details{is_open}><summary>预览</summary>{item_preview(r)}</details>"
+                "</td></tr>"
             )
     rows = "".join(row_parts)
     table_html = (
         "<table><thead><tr>"
-        "<th>name</th><th>type</th><th>size</th><th>summary</th>"
+        "<th>字段</th><th>值</th><th>大小</th><th>类</th>"
         "</tr></thead><tbody>" + rows + "</tbody></table>"
         if records else "<p class='muted'>(no user variables)</p>"
     )
@@ -835,44 +816,42 @@ def render_html(input_file: str, kind: str, header: str, records: list[VarRecord
     return f"""<!DOCTYPE html>
 <html><head><meta charset="utf-8"><title>{html.escape(file_name)}</title>
 <style>
-  body {{ font-family: Consolas, "Segoe UI", monospace; background:#1e1e1e; color:#e6e6e6; padding:20px; }}
-  h1 {{ margin:0 0 4px 0; color:#9cdcfe; font-size:18px; }}
-  .meta {{ color:#888; font-size:12px; margin-bottom:16px; }}
-  .meta b {{ color:#bbb; }}
-  table {{ border-collapse:collapse; width:100%; font-size:13px; }}
-  th, td {{ padding:6px 10px; border-bottom:1px solid #333; text-align:left; vertical-align:top; }}
-  thead th {{ position:sticky; top:0; background:#252526; color:#9cdcfe; border-bottom:1px solid #444; }}
-  tbody tr:nth-child(even) {{ background:#252526; }}
-  td.n {{ color:#dcdcaa; }}
-  td.r, th.r {{ text-align:right; font-variant-numeric:tabular-nums; }}
-  td.s {{ color:#b5cea8; }}
-  .detail-row td {{ background:#1b1b1b; padding-top:10px; padding-bottom:14px; }}
-  details summary {{ cursor:pointer; color:#9cdcfe; margin:4px 0 8px; }}
-  .preview {{ color:#ddd; }}
-  details.advanced {{ margin-top:6px; color:#aaa; }}
-  details.advanced pre {{ margin:6px 0 0; white-space:pre-wrap; color:#aaa; font-size:12px; }}
-  pre {{ margin:8px 0; white-space:pre-wrap; color:#ddd; }}
-  table.mini {{ margin:8px 0 12px; font-size:12px; }}
-  table.mini th, table.mini td {{ padding:5px 8px; }}
-  table.values {{ max-width:520px; }}
-  .submeta {{ color:#bbb; margin:4px 0 8px; }}
-  .warn {{ background:#3a2a1f; color:#ffb86b; padding:10px 12px; border-radius:6px; margin:12px 0; font-size:13px; }}
-  .warn pre {{ margin:6px 0 0 0; white-space:pre-wrap; color:#e6e6e6; }}
-  .muted {{ color:#888; }}
+  body {{ margin:0; background:#f3f3f3; color:#222; font-family:"Segoe UI", Arial, sans-serif; font-size:14px; }}
+  .bar {{ background:#075489; color:#fff; height:28px; line-height:28px; padding:0 8px; font-size:18px; }}
+  .tab {{ display:inline-block; background:#fff; border-right:1px solid #c8c8c8; padding:7px 14px 6px; font-size:18px; }}
+  .summary {{ border-top:1px solid #c8c8c8; border-bottom:1px solid #c8c8c8; padding:7px 10px; background:#f7f7f7; font-size:18px; }}
+  .wrap {{ background:#fff; }}
+  table {{ border-collapse:collapse; width:100%; table-layout:fixed; }}
+  th, td {{ border-bottom:1px solid #d0d0d0; padding:5px 8px; text-align:left; vertical-align:top; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }}
+  th {{ background:#f0f0f0; color:#000; font-weight:600; border-right:1px solid #d0d0d0; }}
+  td {{ color:#555; }}
+  th:nth-child(1), td:nth-child(1) {{ width:30%; color:#333; }}
+  th:nth-child(2), td:nth-child(2) {{ width:24%; }}
+  th:nth-child(3), td:nth-child(3) {{ width:15%; }}
+  th:nth-child(4), td:nth-child(4) {{ width:15%; }}
+  .field {{ color:#2f2f2f; }}
+  .value {{ color:#0b58a2; font-style:italic; }}
+  .caret, .spacer {{ display:inline-block; width:18px; color:#666; }}
+  .preview-row td {{ background:#fafafa; border-bottom:1px solid #d8d8d8; white-space:normal; overflow:visible; }}
+  details {{ max-width:100%; }}
+  details summary {{ cursor:pointer; color:#444; margin:2px 0 8px; }}
+  details[open] summary {{ margin-bottom:8px; }}
+  .preview {{ overflow:auto; max-width:100%; }}
+  table.mini {{ margin:6px 0 12px; font-size:13px; table-layout:auto; width:auto; min-width:55%; }}
+  table.mini th, table.mini td {{ padding:5px 10px; }}
+  table.mini.values {{ min-width:360px; }}
+  table.mini.values th:nth-child(1), table.mini.values td:nth-child(1) {{ width:60px; }}
+  .r {{ text-align:right; font-variant-numeric:tabular-nums; }}
+  pre {{ margin:6px 0; white-space:pre-wrap; }}
+  .warn {{ margin:10px; padding:8px 10px; background:#fff4d9; border:1px solid #e1c57a; }}
+  .muted {{ color:#666; margin:6px 0; }}
 </style></head>
 <body>
-  <h1>{html.escape(file_name)}</h1>
-  <div class="meta">
-    <b>size</b> {human_bytes(file_size)} &nbsp;·&nbsp;
-    <b>mat</b> {html.escape(kind)} &nbsp;·&nbsp;
-    <b>load</b> {load_secs*1000:.0f} ms &nbsp;·&nbsp;
-    <b>root vars</b> {root_count} &nbsp;·&nbsp;
-    <b>items</b> {len(records)} &nbsp;·&nbsp;
-    <b>generated</b> {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
-    {('<br><b>header</b> ' + html.escape(header)) if header else ''}
-  </div>
+  <div class="bar">Variables</div>
+  <div class="tab">{html.escape(os.path.splitext(file_name)[0])}</div>
+  <div class="summary">{root_count} variable{'s' if root_count != 1 else ''}</div>
   {notice}
-  {table_html}
+  <div class="wrap">{table_html}</div>
 </body></html>
 """
 
