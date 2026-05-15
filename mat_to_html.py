@@ -19,8 +19,9 @@ H5_SKIP_KEYS = {"#refs#", "#subsystem#"}
 LARGE_SUMMARY_BYTES = 64 * 1024 * 1024
 MAX_STRUCT_DEPTH = 4
 MAX_RECORDS = 200
-MAX_TABLE_PREVIEW_ROWS = 20
+MAX_TABLE_PREVIEW_ROWS = 10
 MAX_TABLE_PREVIEW_COLS = 40
+MAX_RENDER_PREVIEW_COLS = 8
 KNOWN_MATLAB_CLASSES = {
     "double", "single",
     "int8", "int16", "int32", "int64",
@@ -73,6 +74,8 @@ def detect_mat_kind(path: str) -> str:
     with open(path, "rb") as f:
         head = f.read(128)
     if head.startswith(HDF5_MAGIC):
+        return "v7.3"
+    if b"MATLAB 7.3 MAT-file" in head:
         return "v7.3"
     if head[:6] == b"MATLAB" and b"5.0 MAT-file" in head:
         return "v6/v7"
@@ -464,7 +467,7 @@ def _read_table_block(h5file, mcos_refs, block) -> TableData:
 def _format_scalar(x, dtype_kind: str):
     import numpy as np
     if dtype_kind == "f":
-        return float(x) if np.isfinite(x) else "NaN"
+        return f"{float(x):.6g}" if np.isfinite(x) else "NaN"
     if dtype_kind == "c":
         return complex(x).__repr__()
     if dtype_kind in ("i", "u"):
@@ -725,43 +728,27 @@ def render_html(input_file: str, kind: str, header: str, records: list[VarRecord
     file_size = os.path.getsize(input_file) if os.path.exists(input_file) else 0
     root_count = sum(1 for r in records if "." not in r.name)
 
-    def render_table_preview(td: TableData) -> str:
-        col_head = "".join(f"<th>{html.escape(c.name)}</th>" for c in td.columns)
-        row_count = min(MAX_TABLE_PREVIEW_ROWS, max((len(c.first) for c in td.columns), default=0))
-        body_rows = []
-        for row_idx in range(row_count):
-            cells = []
-            for col in td.columns:
-                value = col.first[row_idx] if row_idx < len(col.first) else ""
-                cells.append(f"<td>{html.escape(str(value))}</td>")
-            body_rows.append("<tr>" + "".join(cells) + "</tr>")
+    def fmt_value(value) -> str:
+        import math
+        if isinstance(value, float):
+            if math.isnan(value):
+                return "NaN"
+            if math.isinf(value):
+                return "Inf" if value > 0 else "-Inf"
+            return f"{value:.6g}"
+        if isinstance(value, complex):
+            return f"{value.real:.6g}{value.imag:+.6g}i"
+        return str(value)
 
-        col_rows = "".join(
-            f"<tr><td>{html.escape(c.name)}</td>"
-            f"<td>{html.escape(c.dtype)}</td>"
-            f"<td class='r'>{c.n_rows}</td>"
-            f"<td class='r'>{c.n_nan}</td>"
-            f"<td class='r'>{'' if c.vmin is None else f'{c.vmin:.6g}'}</td>"
-            f"<td class='r'>{'' if c.vmax is None else f'{c.vmax:.6g}'}</td></tr>"
-            for c in td.columns
-        )
-
-        return (
-            "<div class='preview'>"
-            "<table class='mini columns'><thead><tr><th>列</th><th>类型</th><th class='r'>行</th>"
-            "<th class='r'>NaN</th><th class='r'>最小</th><th class='r'>最大</th></tr></thead>"
-            f"<tbody>{col_rows}</tbody></table>"
-            "<table class='mini'><thead><tr>" + col_head + "</tr></thead>"
-            "<tbody>" + "".join(body_rows) + "</tbody></table>"
-            "</div>"
-        )
+    def fmt_num(value: Optional[float]) -> str:
+        return "" if value is None else f"{value:.6g}"
 
     def semantic_type(r: VarRecord) -> str:
         return "table" if r.table_data is not None else r.matlab_class
 
     def semantic_size(r: VarRecord) -> str:
         if r.table_data is not None:
-            return f"{r.table_data.n_rows} × {r.table_data.n_cols}"
+            return f"{r.table_data.n_rows} x {r.table_data.n_cols}"
         if r.shape == "(opaque)":
             return ""
         if r.matlab_class == "struct":
@@ -770,116 +757,220 @@ def render_html(input_file: str, kind: str, header: str, records: list[VarRecord
 
     def matlab_value(r: VarRecord) -> str:
         if r.table_data is not None:
-            return f"{r.table_data.n_rows}×{r.table_data.n_cols} table"
-        if r.shape == "(opaque)":
-            return ""
-        if r.matlab_class == "struct":
+            return f"{r.table_data.n_rows} x {r.table_data.n_cols} table"
+        if r.shape == "(opaque)" or r.matlab_class == "struct":
             return ""
         if r.matlab_class in ("char", "string"):
             return r.summary
-        return f"{semantic_size(r)} {semantic_type(r)}"
+        return f"{semantic_size(r)} {semantic_type(r)}".strip()
 
     def item_preview(r: VarRecord) -> str:
         if r.table_data is not None:
             return render_table_preview(r.table_data)
         return r.preview_html
 
-    row_parts = []
+    def render_table_preview(td: TableData) -> str:
+        visible_cols = td.columns[:MAX_RENDER_PREVIEW_COLS]
+        col_head = "".join(f"<th>{html.escape(c.name)}</th>" for c in visible_cols)
+        row_count = min(MAX_TABLE_PREVIEW_ROWS, max((len(c.first) for c in visible_cols), default=0))
+        body_rows = []
+        for row_idx in range(row_count):
+            cells = []
+            for col in visible_cols:
+                value = col.first[row_idx] if row_idx < len(col.first) else ""
+                is_numeric = isinstance(value, (int, float, complex))
+                text_value = fmt_value(value)
+                cls_name = "num" if is_numeric else "text-cell"
+                if text_value in ("NaN", "Inf", "-Inf", ""):
+                    cls_name += " muted-value"
+                cls = f" class='{cls_name}'"
+                cells.append(f"<td{cls}>{html.escape(text_value)}</td>")
+            body_rows.append("<tr>" + "".join(cells) + "</tr>")
+
+        col_rows = "".join(
+            f"<tr><td>{html.escape(c.name)}</td>"
+            f"<td>{html.escape(c.dtype)}</td>"
+            f"<td class='num'>{c.n_rows}</td>"
+            f"<td class='num'>{c.n_nan}</td>"
+            f"<td class='num'>{html.escape(fmt_num(c.vmin))}</td>"
+            f"<td class='num'>{html.escape(fmt_num(c.vmax))}</td></tr>"
+            for c in td.columns
+        )
+        note = ""
+        if td.n_cols > len(visible_cols):
+            note = (
+                f"<div class='table-note'>Showing first {len(visible_cols)} of "
+                f"{td.n_cols} columns and first {row_count} of {td.n_rows} rows.</div>"
+            )
+        columns_text = ", ".join(c.name for c in td.columns)
+
+        return (
+            "<div class='preview-block'>"
+            f"<div class='columns-line'>{html.escape(columns_text)}</div>"
+            "<h3>Column Summary</h3>"
+            "<div class='table-scroll'><table class='data-table columns'><thead><tr>"
+            "<th>Column</th><th>Type</th><th class='num'>Rows</th>"
+            "<th class='num'>NaN</th><th class='num'>Min</th><th class='num'>Max</th></tr></thead>"
+            f"<tbody>{col_rows}</tbody></table></div>"
+            "<h3>Data Preview</h3>"
+            f"{note}"
+            "<div class='table-scroll'><table class='data-table'><thead><tr>" + col_head + "</tr></thead>"
+            "<tbody>" + "".join(body_rows) + "</tbody></table></div>"
+            "</div>"
+        )
+
+    def row_summary(r: VarRecord) -> str:
+        if r.table_data is not None:
+            names = ", ".join(c.name for c in r.table_data.columns[:6])
+            return names + ("..." if r.table_data.n_cols > 6 else "")
+        if r.matlab_class == "struct":
+            return "expanded below"
+        if r.shape == "(opaque)":
+            return "metadata only"
+        return r.summary
+
+    tree_rows = []
+    preview_cards = []
+    preview_index = 0
     for idx, r in enumerate(records):
         depth = r.name.count(".")
         field_name = r.name.split(".")[-1]
-        indent = f" style='padding-left:{12 + depth * 28}px'"
+        indent = f" style='padding-left:{14 + depth * 24}px'"
         preview = item_preview(r)
         has_preview = bool(preview)
-        is_open = has_preview and len(records) == 1
-        detail_id = f"detail-{idx}"
-        field_cell = (
-            f"<button class='twisty{' open' if is_open else ''}' "
-            f"aria-expanded='{'true' if is_open else 'false'}' "
-            f"aria-controls='{detail_id}' onclick='toggleDetail(this)'></button>"
-            f"{html.escape(field_name)}"
-            if has_preview else
-            f"<span class='spacer'></span>{html.escape(field_name)}"
+        target = f"item-{idx}" if has_preview else ""
+        marker = "<span class='tree-dot'>-</span>" if depth == 0 else "<span class='tree-branch'>|--</span>"
+        name_html = (
+            f"<a href='#{target}'>{html.escape(field_name)}</a>" if has_preview else html.escape(field_name)
         )
-        row_parts.append(
-            f"<tr><td class='field'{indent}>{field_cell}</td>"
+        tree_rows.append(
+            f"<tr><td class='field'{indent}>{marker}{name_html}</td>"
             f"<td class='value'>{html.escape(matlab_value(r))}</td>"
             f"<td>{html.escape(semantic_size(r))}</td>"
-            f"<td>{html.escape(semantic_type(r))}</td></tr>"
-            )
+            f"<td>{html.escape(semantic_type(r))}</td>"
+            f"<td class='summary-text'>{html.escape(row_summary(r))}</td></tr>"
+        )
         if has_preview:
-            detail_pad = 12 + depth * 28 + 18
-            row_parts.append(
-                f"<tr id='{detail_id}' class='detail-row{' open' if is_open else ''}'>"
-                f"<td colspan='4' style='padding-left:{detail_pad}px'>"
-                f"<div class='detail-content'>{preview}</div></td></tr>"
+            open_attr = " open" if preview_index == 0 else ""
+            if r.table_data is not None:
+                subtitle = f"table · {r.table_data.n_rows} rows x {r.table_data.n_cols} columns"
+            else:
+                subtitle = f"{semantic_type(r)} · {semantic_size(r)}"
+            preview_cards.append(
+                f"<details id='{target}' class='item-card'{open_attr}>"
+                f"<summary><span><strong>{html.escape(r.name)}</strong>"
+                f"<small>{html.escape(subtitle)}</small></span></summary>"
+                f"{preview}</details>"
             )
-    rows = "".join(row_parts)
-    table_html = (
-        "<table><thead><tr>"
-        "<th>字段</th><th>值</th><th>大小</th><th>类</th>"
-        "</tr></thead><tbody>" + rows + "</tbody></table>"
+            preview_index += 1
+
+    tree_html = (
+        "<table class='tree-table'><thead><tr>"
+        "<th>Variable</th><th>Value</th><th>Size</th><th>Class</th><th>Summary</th>"
+        "</tr></thead><tbody>" + "".join(tree_rows) + "</tbody></table>"
         if records else "<p class='muted'>(no user variables)</p>"
+    )
+    cards_html = "".join(preview_cards) if preview_cards else (
+        "<div class='empty-card'>No expandable value preview is available for this file.</div>"
     )
 
     notice = (
         f"<div class='warn'><b>Could not parse:</b><pre>{html.escape(error)}</pre></div>"
         if error else ""
     )
+    generated = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    class_counts = {}
+    for r in records:
+        class_counts[semantic_type(r)] = class_counts.get(semantic_type(r), 0) + 1
+    class_badges = "".join(
+        f"<span class='badge'>{html.escape(k)} <b>{v}</b></span>"
+        for k, v in sorted(class_counts.items())
+    )
+    kind_label = "MATLAB v7.3" if kind == "v7.3" else ("MATLAB v6/v7" if kind == "v6/v7" else "MAT-file")
+    hdf5_badge = "<span class='badge'>HDF5</span>" if kind == "v7.3" else ""
 
     return f"""<!DOCTYPE html>
 <html><head><meta charset="utf-8"><title>{html.escape(file_name)}</title>
 <style>
-  body {{ margin:0; background:#f3f3f3; color:#222; font-family:"Segoe UI", Arial, sans-serif; font-size:14px; }}
-  .bar {{ background:#075489; color:#fff; height:28px; line-height:28px; padding:0 8px; font-size:18px; }}
-  .tab {{ display:inline-block; background:#fff; border-right:1px solid #c8c8c8; padding:7px 14px 6px; font-size:18px; }}
-  .summary {{ border-top:1px solid #c8c8c8; border-bottom:1px solid #c8c8c8; padding:7px 10px; background:#f7f7f7; font-size:18px; }}
-  .wrap {{ background:#fff; }}
-  table {{ border-collapse:collapse; width:100%; table-layout:fixed; }}
-  th, td {{ border-bottom:1px solid #d0d0d0; padding:5px 8px; text-align:left; vertical-align:top; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }}
-  th {{ background:#f0f0f0; color:#000; font-weight:600; border-right:1px solid #d0d0d0; }}
-  td {{ color:#555; }}
-  th:nth-child(1), td:nth-child(1) {{ width:30%; color:#333; }}
-  th:nth-child(2), td:nth-child(2) {{ width:24%; }}
-  th:nth-child(3), td:nth-child(3) {{ width:15%; }}
-  th:nth-child(4), td:nth-child(4) {{ width:15%; }}
-  .field {{ color:#2f2f2f; }}
-  .value {{ color:#0b58a2; font-style:italic; }}
-  .spacer, .twisty {{ display:inline-block; width:18px; }}
-  .twisty {{ border:0; padding:0; margin:0; background:transparent; color:#666; cursor:pointer; vertical-align:1px; font:inherit; }}
-  .twisty::before {{ content:"▸"; font-size:11px; }}
-  .twisty.open::before {{ content:"▾"; }}
-  .detail-row {{ display:none; }}
-  .detail-row.open {{ display:table-row; }}
-  .detail-row td {{ background:#fafafa; white-space:normal; overflow:visible; }}
-  .detail-content {{ margin:4px 0 4px 0; max-width:calc(100vw - 80px); overflow:auto; color:#555; }}
-  .preview {{ overflow:auto; max-width:100%; }}
-  table.mini {{ margin:6px 0 12px; font-size:13px; table-layout:auto; width:auto; min-width:55%; }}
-  table.mini th, table.mini td {{ padding:5px 10px; }}
-  table.mini.values {{ min-width:360px; }}
-  table.mini.values th:nth-child(1), table.mini.values td:nth-child(1) {{ width:60px; }}
-  .r {{ text-align:right; font-variant-numeric:tabular-nums; }}
-  pre {{ margin:6px 0; white-space:pre-wrap; }}
-  .warn {{ margin:10px; padding:8px 10px; background:#fff4d9; border:1px solid #e1c57a; }}
-  .muted {{ color:#666; margin:6px 0; }}
+  :root {{ --bg:#f6f8fa; --card:#fff; --line:#e1e7ef; --line2:#edf1f5; --text:#1f2937; --muted:#6b7280; --blue:#0f5f86; --soft:#f9fbfd; }}
+  * {{ box-sizing:border-box; }}
+  body {{ margin:0; background:var(--bg); color:var(--text); font-family:"Segoe UI", Arial, sans-serif; font-size:14px; }}
+  .page {{ max-width:1360px; margin:0 auto; padding:22px 26px 36px; }}
+  .hero {{ background:var(--card); border:1px solid var(--line); border-radius:8px; padding:20px 22px; box-shadow:0 1px 2px rgba(15,23,42,.05); }}
+  h1 {{ margin:0 0 8px; font-size:24px; line-height:1.2; font-weight:650; letter-spacing:0; }}
+  .meta {{ color:var(--muted); display:flex; flex-wrap:wrap; gap:8px 14px; font-size:13px; }}
+  .meta span:not(:last-child)::after {{ content:"·"; margin-left:14px; color:#aab3bd; }}
+  .badges {{ display:flex; flex-wrap:wrap; gap:8px; margin-top:14px; }}
+  .badge {{ display:inline-flex; align-items:center; gap:5px; border:1px solid #d7e2ea; background:#f3f8fb; color:#244b5c; border-radius:999px; padding:4px 9px; font-size:12px; }}
+  .section {{ margin-top:16px; background:var(--card); border:1px solid var(--line); border-radius:8px; box-shadow:0 1px 2px rgba(15,23,42,.04); overflow:hidden; }}
+  .section-title {{ padding:13px 16px; border-bottom:1px solid var(--line); font-weight:650; color:#111827; }}
+  table {{ border-collapse:separate; border-spacing:0; width:100%; }}
+  th, td {{ border-bottom:1px solid var(--line2); padding:8px 12px; text-align:left; vertical-align:middle; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }}
+  th {{ position:sticky; top:0; background:#f3f5f7; color:#374151; font-weight:650; z-index:1; }}
+  tbody tr:nth-child(even) td {{ background:#fbfcfd; }}
+  .tree-table th:nth-child(1), .tree-table td:nth-child(1) {{ width:34%; }}
+  .tree-table th:nth-child(2), .tree-table td:nth-child(2) {{ width:18%; }}
+  .tree-table th:nth-child(3), .tree-table td:nth-child(3) {{ width:13%; }}
+  .tree-table th:nth-child(4), .tree-table td:nth-child(4) {{ width:12%; }}
+  .tree-table th:nth-child(5), .tree-table td:nth-child(5) {{ width:23%; }}
+  .field, .value, .num, code {{ font-family:Consolas, "Cascadia Mono", monospace; }}
+  .field a {{ color:#0b5c83; text-decoration:none; }}
+  .field a:hover {{ text-decoration:underline; }}
+  .tree-dot, .tree-branch {{ display:inline-block; width:28px; color:#9aa4b2; font-family:Consolas, monospace; }}
+  .value {{ color:#0b5c83; font-style:italic; }}
+  .summary-text {{ color:var(--muted); }}
+  .cards {{ display:grid; gap:14px; margin-top:16px; }}
+  .item-card {{ background:var(--card); border:1px solid var(--line); border-radius:8px; overflow:hidden; box-shadow:0 1px 2px rgba(15,23,42,.04); }}
+  .item-card > summary {{ cursor:pointer; list-style:none; padding:14px 16px; background:#fff; border-bottom:1px solid transparent; }}
+  .item-card > summary::-webkit-details-marker {{ display:none; }}
+  .item-card > summary::before {{ content:"▸"; display:inline-block; width:18px; color:#6b7280; }}
+  .item-card[open] > summary {{ border-bottom-color:var(--line); }}
+  .item-card[open] > summary::before {{ content:"▾"; }}
+  .item-card strong {{ font-family:Consolas, "Cascadia Mono", monospace; font-size:16px; }}
+  .item-card small {{ display:block; color:var(--muted); margin:4px 0 0 18px; font-size:12px; }}
+  .preview-block {{ padding:14px 16px 16px; }}
+  .columns-line {{ background:var(--soft); border:1px solid var(--line2); border-radius:6px; color:#435160; padding:9px 10px; font-family:Consolas, "Cascadia Mono", monospace; white-space:nowrap; overflow:auto; }}
+  h3 {{ margin:14px 0 8px; font-size:13px; color:#111827; font-weight:650; }}
+  .table-scroll {{ max-width:100%; overflow:auto; border:1px solid var(--line2); border-radius:6px; }}
+  .data-table {{ min-width:720px; font-size:13px; }}
+  .data-table th, .data-table td {{ padding:7px 10px; height:32px; }}
+  .data-table th {{ background:#f3f5f7; }}
+  .num {{ text-align:right; font-variant-numeric:tabular-nums; }}
+  .text-cell {{ text-align:left; }}
+  .muted-value {{ color:#9aa4b2; }}
+  .table-note {{ color:var(--muted); font-size:12px; margin:-2px 0 8px; }}
+  .empty-card {{ background:var(--card); border:1px dashed #cfd8e3; border-radius:8px; color:var(--muted); padding:16px; }}
+  pre {{ margin:0; white-space:pre-wrap; font-family:Consolas, "Cascadia Mono", monospace; }}
+  .warn {{ margin-top:16px; padding:10px 12px; background:#fff8e6; border:1px solid #edd38a; border-radius:8px; }}
+  .muted {{ color:var(--muted); margin:0; padding:14px 16px; }}
 </style>
-<script>
-function toggleDetail(btn) {{
-  var id = btn.getAttribute("aria-controls");
-  var row = document.getElementById(id);
-  if (!row) return;
-  var open = !row.classList.contains("open");
-  row.classList.toggle("open", open);
-  btn.classList.toggle("open", open);
-  btn.setAttribute("aria-expanded", open ? "true" : "false");
-}}
-</script></head>
+</head>
 <body>
-  <div class="bar">Variables</div>
-  <div class="tab">{html.escape(os.path.splitext(file_name)[0])}</div>
-  <div class="summary">{root_count} variable{'s' if root_count != 1 else ''}</div>
-  {notice}
-  <div class="wrap">{table_html}</div>
+  <main class="page">
+    <header class="hero">
+      <h1>{html.escape(file_name)}</h1>
+      <div class="meta">
+        <span>{kind_label}</span>
+        <span>{human_bytes(file_size)}</span>
+        <span>{root_count} root variable{'s' if root_count != 1 else ''}</span>
+        <span>load {load_secs * 1000:.0f} ms</span>
+        <span>generated {generated}</span>
+      </div>
+      <div class="badges">
+        <span class="badge">{html.escape(kind_label)}</span>
+        {hdf5_badge}
+        {class_badges}
+      </div>
+    </header>
+    {notice}
+    <section class="section">
+      <div class="section-title">Variable Structure</div>
+      {tree_html}
+    </section>
+    <section class="cards">
+      {cards_html}
+    </section>
+  </main>
 </body></html>
 """
 
