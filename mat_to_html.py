@@ -804,8 +804,7 @@ def render_html(input_file: str, kind: str, header: str, records: list[VarRecord
 
         return (
             "<div class='preview-block'>"
-            f"<div class='columns-line'>{html.escape(columns_text)}</div>"
-            "<h3>Data Preview</h3>"
+            f"<div class='columns-line'>Columns: {html.escape(columns_text)}</div>"
             f"{note}"
             "<div class='table-scroll'><table class='data-table'><thead><tr>" + col_head + "</tr></thead>"
             "<tbody>" + "".join(body_rows) + "</tbody></table></div>"
@@ -817,19 +816,7 @@ def render_html(input_file: str, kind: str, header: str, records: list[VarRecord
             "</div>"
         )
 
-    def row_summary(r: VarRecord) -> str:
-        if r.table_data is not None:
-            names = ", ".join(c.name for c in r.table_data.columns[:6])
-            return names + ("..." if r.table_data.n_cols > 6 else "")
-        if r.matlab_class == "struct":
-            return "expanded below"
-        if r.shape == "(opaque)":
-            return "metadata only"
-        return r.summary
-
-    root_rows = []
-    workspace_rows = []
-    preview_cards = []
+    rows = []
     for idx, r in enumerate(records):
         depth = r.name.count(".")
         if depth > 1:
@@ -837,46 +824,30 @@ def render_html(input_file: str, kind: str, header: str, records: list[VarRecord
         field_name = r.name.split(".")[-1]
         preview = item_preview(r)
         has_preview = bool(preview)
-        target = f"item-{idx}" if has_preview else ""
-        name_html = (
-            f"<a href='#{target}'>{html.escape(field_name)}</a>" if has_preview else html.escape(field_name)
+        indent = 16 + depth * 22
+        row_id = f"preview-{idx}"
+        arrow = (
+            f"<button class='twisty' aria-expanded='false' aria-controls='{row_id}' "
+            f"onclick='togglePreview(this)'></button>"
+            if has_preview else "<span class='spacer'></span>"
         )
-        row_html = (
-            f"<tr><td class='field'>{name_html}</td>"
-            f"<td>{html.escape(semantic_type(r))}</td>"
+        rows.append(
+            f"<tr><td class='field' style='padding-left:{indent}px'>{arrow}{html.escape(field_name)}</td>"
+            f"<td class='value'>{html.escape(matlab_value(r))}</td>"
             f"<td>{html.escape(semantic_size(r))}</td>"
-            f"<td class='summary-text'>{html.escape(row_summary(r))}</td></tr>"
+            f"<td>{html.escape(semantic_type(r))}</td></tr>"
         )
-        if depth == 0:
-            root_rows.append(row_html)
-        else:
-            workspace_rows.append(row_html)
         if has_preview:
-            if r.table_data is not None:
-                subtitle = f"table · {r.table_data.n_rows} rows x {r.table_data.n_cols} columns"
-            else:
-                subtitle = f"{semantic_type(r)} · {semantic_size(r)}"
-            preview_cards.append(
-                f"<details id='{target}' class='item-card'>"
-                f"<summary><span><strong>{html.escape(r.name)}</strong>"
-                f"<small>{html.escape(subtitle)}</small></span></summary>"
-                f"{preview}</details>"
+            rows.append(
+                f"<tr id='{row_id}' class='preview-row'><td colspan='4' style='padding-left:{indent + 22}px'>"
+                f"{preview}</td></tr>"
             )
 
-    root_html = (
-        "<table class='root-table'><thead><tr>"
-        "<th>Name</th><th>Class</th><th>Size</th><th>Summary</th>"
-        "</tr></thead><tbody>" + "".join(root_rows) + "</tbody></table>"
-        if root_rows else "<p class='muted'>(no root variables)</p>"
-    )
-    workspace_html = (
-        "<table class='workspace-table'><thead><tr>"
-        "<th>Name</th><th>Class</th><th>Size</th><th>Summary</th>"
-        "</tr></thead><tbody>" + "".join(workspace_rows) + "</tbody></table>"
-        if workspace_rows else "<p class='muted'>(no fields)</p>"
-    )
-    cards_html = "".join(preview_cards) if preview_cards else (
-        "<div class='empty-card'>No expandable value preview is available for this file.</div>"
+    variables_html = (
+        "<table class='variables-table'><thead><tr>"
+        "<th>Name</th><th>Value</th><th>Size</th><th>Class</th>"
+        "</tr></thead><tbody>" + "".join(rows) + "</tbody></table>"
+        if records else "<p class='muted'>(no user variables)</p>"
     )
 
     notice = (
@@ -884,66 +855,43 @@ def render_html(input_file: str, kind: str, header: str, records: list[VarRecord
         if error else ""
     )
     generated = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    class_counts = {}
-    for r in records:
-        if "." in r.name:
-            class_counts[semantic_type(r)] = class_counts.get(semantic_type(r), 0) + 1
-    class_badges = "".join(
-        f"<span class='badge'>{html.escape(k)} <b>{v}</b></span>"
-        for k, v in sorted(class_counts.items())
-    )
     kind_label = "MATLAB v7.3" if kind == "v7.3" else ("MATLAB v6/v7" if kind == "v6/v7" else "MAT-file")
-    hdf5_badge = "<span class='badge'>HDF5</span>" if kind == "v7.3" else ""
     table_count = sum(1 for r in records if "." in r.name and semantic_type(r) == "table")
 
     return f"""<!DOCTYPE html>
 <html><head><meta charset="utf-8"><title>{html.escape(file_name)}</title>
 <style>
-  :root {{ --bg:#f6f8fa; --card:#fff; --head:#f3f5f7; --line:#e1e7ef; --line2:#edf1f5; --text:#1f2937; --muted:#6b7280; --accent:#0f5f86; --soft:#f9fbfd; --stripe:#fbfcfd; }}
+  :root {{ --bg:#f5f5f5; --panel:#fff; --head:#efefef; --line:#d5d5d5; --line2:#e7e7e7; --text:#262626; --muted:#666; --accent:#075da8; --soft:#fafafa; --stripe:#fbfbfb; }}
   @media (prefers-color-scheme: dark) {{
-    :root {{ --bg:#111; --card:#181818; --head:#202020; --line:#303030; --line2:#292929; --text:#f2f5f8; --muted:#a6adb6; --accent:#8fd3ff; --soft:#151515; --stripe:#161616; }}
+    :root {{ --bg:#101010; --panel:#151515; --head:#202020; --line:#303030; --line2:#252525; --text:#f2f5f8; --muted:#a7aeb8; --accent:#8fd3ff; --soft:#181818; --stripe:#121212; }}
   }}
   * {{ box-sizing:border-box; }}
   body {{ margin:0; background:var(--bg); color:var(--text); font-family:"Segoe UI", Arial, sans-serif; font-size:14px; }}
-  .page {{ max-width:1280px; margin:0 auto; padding:16px 18px 24px; }}
-  .hero {{ background:var(--card); border:1px solid var(--line); border-radius:8px; padding:14px 16px; }}
-  h1 {{ margin:0 0 7px; font-size:22px; line-height:1.2; font-weight:650; letter-spacing:0; }}
-  .meta {{ color:var(--muted); display:flex; flex-wrap:wrap; gap:8px 14px; font-size:13px; }}
+  .page {{ max-width:none; margin:0; padding:12px 14px 20px; }}
+  .top {{ padding:4px 2px 10px; }}
+  h1 {{ margin:0 0 6px; font-size:20px; line-height:1.2; font-weight:600; letter-spacing:0; }}
+  .meta {{ color:var(--muted); display:flex; flex-wrap:wrap; gap:6px 12px; font-size:13px; }}
   .meta span:not(:last-child)::after {{ content:"·"; margin-left:14px; color:#aab3bd; }}
-  .badges {{ display:flex; flex-wrap:wrap; gap:7px; margin-top:10px; }}
-  .badge {{ display:inline-flex; align-items:center; gap:5px; border:1px solid var(--line); background:var(--soft); color:var(--text); border-radius:999px; padding:3px 8px; font-size:12px; }}
-  .section {{ margin-top:12px; background:var(--card); border:1px solid var(--line); border-radius:8px; overflow:hidden; }}
-  .section-title {{ padding:10px 14px; border-bottom:1px solid var(--line); font-weight:650; color:var(--text); }}
+  .workspace {{ background:var(--panel); border:1px solid var(--line); overflow:auto; }}
   table {{ border-collapse:separate; border-spacing:0; width:100%; }}
   th, td {{ border-bottom:1px solid var(--line2); padding:8px 12px; text-align:left; vertical-align:middle; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }}
   th {{ position:sticky; top:0; background:var(--head); color:var(--text); font-weight:650; z-index:1; }}
   tbody tr:nth-child(even) td {{ background:var(--stripe); }}
-  .root-table th:nth-child(1), .root-table td:nth-child(1),
-  .workspace-table th:nth-child(1), .workspace-table td:nth-child(1) {{ width:34%; }}
-  .root-table th:nth-child(2), .root-table td:nth-child(2),
-  .workspace-table th:nth-child(2), .workspace-table td:nth-child(2) {{ width:13%; }}
-  .root-table th:nth-child(3), .root-table td:nth-child(3),
-  .workspace-table th:nth-child(3), .workspace-table td:nth-child(3) {{ width:16%; }}
-  .root-table th:nth-child(4), .root-table td:nth-child(4),
-  .workspace-table th:nth-child(4), .workspace-table td:nth-child(4) {{ width:37%; }}
+  .variables-table th:nth-child(1), .variables-table td:nth-child(1) {{ width:36%; }}
+  .variables-table th:nth-child(2), .variables-table td:nth-child(2) {{ width:24%; }}
+  .variables-table th:nth-child(3), .variables-table td:nth-child(3) {{ width:18%; }}
+  .variables-table th:nth-child(4), .variables-table td:nth-child(4) {{ width:22%; }}
   .field, .value, .num, code {{ font-family:Consolas, "Cascadia Mono", monospace; }}
-  .field a {{ color:var(--accent); text-decoration:none; }}
-  .field a:hover {{ text-decoration:underline; }}
   .value {{ color:var(--accent); font-style:italic; }}
-  .summary-text {{ color:var(--muted); }}
-  .details-section {{ margin-top:12px; }}
-  .cards {{ display:grid; gap:8px; }}
-  .item-card {{ background:var(--card); border:1px solid var(--line); border-radius:8px; overflow:hidden; }}
-  .item-card > summary {{ cursor:pointer; list-style:none; padding:10px 14px; background:var(--card); border-bottom:1px solid transparent; }}
-  .item-card > summary::-webkit-details-marker {{ display:none; }}
-  .item-card > summary::before {{ content:"▸"; display:inline-block; width:18px; color:var(--muted); }}
-  .item-card[open] > summary {{ border-bottom-color:var(--line); }}
-  .item-card[open] > summary::before {{ content:"▾"; }}
-  .item-card strong {{ font-family:Consolas, "Cascadia Mono", monospace; font-size:15px; }}
-  .item-card small {{ display:block; color:var(--muted); margin:4px 0 0 18px; font-size:12px; }}
-  .preview-block {{ padding:12px 14px 14px; }}
-  .columns-line {{ background:var(--soft); border:1px solid var(--line2); border-radius:6px; color:var(--muted); padding:8px 10px; font-family:Consolas, "Cascadia Mono", monospace; white-space:nowrap; overflow:auto; }}
-  h3 {{ margin:12px 0 7px; font-size:13px; color:var(--text); font-weight:650; }}
+  .spacer, .twisty {{ display:inline-block; width:18px; }}
+  .twisty {{ border:0; padding:0; margin:0; background:transparent; color:var(--muted); cursor:pointer; vertical-align:1px; font:inherit; }}
+  .twisty::before {{ content:"▸"; font-size:11px; }}
+  .twisty.open::before {{ content:"▾"; }}
+  .preview-row {{ display:none; }}
+  .preview-row.open {{ display:table-row; }}
+  .preview-row td {{ background:var(--soft); white-space:normal; overflow:visible; }}
+  .preview-block {{ padding:8px 0 10px; }}
+  .columns-line {{ color:var(--muted); margin:0 0 8px; font-family:Consolas, "Cascadia Mono", monospace; white-space:nowrap; overflow:auto; }}
   .table-scroll {{ max-width:100%; overflow:auto; border:1px solid var(--line2); border-radius:6px; }}
   .data-table {{ min-width:620px; font-size:13px; }}
   .data-table th, .data-table td {{ padding:6px 9px; height:30px; }}
@@ -954,15 +902,25 @@ def render_html(input_file: str, kind: str, header: str, records: list[VarRecord
   .table-note {{ color:var(--muted); font-size:12px; margin:-2px 0 7px; }}
   .stats-detail {{ margin-top:10px; }}
   .stats-detail > summary {{ cursor:pointer; color:var(--accent); font-size:13px; margin-bottom:8px; }}
-  .empty-card {{ background:var(--card); border:1px dashed #cfd8e3; border-radius:8px; color:var(--muted); padding:16px; }}
   pre {{ margin:0; white-space:pre-wrap; font-family:Consolas, "Cascadia Mono", monospace; }}
-  .warn {{ margin-top:16px; padding:10px 12px; background:#fff8e6; border:1px solid #edd38a; border-radius:8px; }}
-  .muted {{ color:var(--muted); margin:0; padding:14px 16px; }}
+  .warn {{ margin:8px 0; padding:8px 10px; background:#fff8e6; border:1px solid #edd38a; }}
+  .muted {{ color:var(--muted); margin:0; padding:12px; }}
 </style>
+<script>
+function togglePreview(btn) {{
+  var id = btn.getAttribute("aria-controls");
+  var row = document.getElementById(id);
+  if (!row) return;
+  var open = !row.classList.contains("open");
+  row.classList.toggle("open", open);
+  btn.classList.toggle("open", open);
+  btn.setAttribute("aria-expanded", open ? "true" : "false");
+}}
+</script>
 </head>
 <body>
   <main class="page">
-    <header class="hero">
+    <header class="top">
       <h1>{html.escape(file_name)}</h1>
       <div class="meta">
         <span>{kind_label}</span>
@@ -972,25 +930,10 @@ def render_html(input_file: str, kind: str, header: str, records: list[VarRecord
         <span>load {load_secs * 1000:.0f} ms</span>
         <span>generated {generated}</span>
       </div>
-      <div class="badges">
-        <span class="badge">{html.escape(kind_label)}</span>
-        {hdf5_badge}
-        {class_badges}
-      </div>
     </header>
     {notice}
-    <section class="section">
-      <div class="section-title">Root Variable</div>
-      {root_html}
-    </section>
-    <section class="section">
-      <div class="section-title">Workspace</div>
-      {workspace_html}
-    </section>
-    <section class="details-section">
-      <div class="cards">
-        {cards_html}
-      </div>
+    <section class="workspace">
+      {variables_html}
     </section>
   </main>
 </body></html>
