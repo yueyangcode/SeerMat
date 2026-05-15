@@ -781,17 +781,19 @@ def render_html(input_file: str, kind: str, header: str, records: list[VarRecord
         return r.preview_html
 
     row_parts = []
-    for r in records:
+    for idx, r in enumerate(records):
         depth = r.name.count(".")
         field_name = r.name.split(".")[-1]
         indent = f" style='padding-left:{12 + depth * 28}px'"
         preview = item_preview(r)
         has_preview = bool(preview)
-        is_open = " open" if has_preview and len(records) == 1 else ""
+        is_open = has_preview and len(records) == 1
+        detail_id = f"detail-{idx}"
         field_cell = (
-            f"<details class='inline-detail'{is_open}>"
-            f"<summary>{html.escape(field_name)}</summary>"
-            f"<div class='detail-content'>{preview}</div></details>"
+            f"<button class='twisty{' open' if is_open else ''}' "
+            f"aria-expanded='{'true' if is_open else 'false'}' "
+            f"aria-controls='{detail_id}' onclick='toggleDetail(this)'></button>"
+            f"{html.escape(field_name)}"
             if has_preview else
             f"<span class='spacer'></span>{html.escape(field_name)}"
         )
@@ -800,6 +802,11 @@ def render_html(input_file: str, kind: str, header: str, records: list[VarRecord
             f"<td class='value'>{html.escape(matlab_value(r))}</td>"
             f"<td>{html.escape(semantic_size(r))}</td>"
             f"<td>{html.escape(semantic_type(r))}</td></tr>"
+            )
+        if has_preview:
+            row_parts.append(
+                f"<tr id='{detail_id}' class='detail-row{' open' if is_open else ''}'>"
+                f"<td></td><td colspan='3'><div class='detail-content'>{preview}</div></td></tr>"
             )
     rows = "".join(row_parts)
     table_html = (
@@ -832,11 +839,14 @@ def render_html(input_file: str, kind: str, header: str, records: list[VarRecord
   th:nth-child(4), td:nth-child(4) {{ width:15%; }}
   .field {{ color:#2f2f2f; }}
   .value {{ color:#0b58a2; font-style:italic; }}
-  .spacer {{ display:inline-block; width:18px; }}
-  details.inline-detail {{ display:block; max-width:none; }}
-  details.inline-detail > summary {{ cursor:pointer; color:#333; list-style-position:outside; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }}
-  details.inline-detail > summary::marker {{ color:#666; font-size:11px; }}
-  .detail-content {{ margin:8px 0 4px 18px; max-width:calc(100vw - 80px); overflow:auto; color:#555; }}
+  .spacer, .twisty {{ display:inline-block; width:18px; }}
+  .twisty {{ border:0; padding:0; margin:0; background:transparent; color:#666; cursor:pointer; vertical-align:1px; font:inherit; }}
+  .twisty::before {{ content:"▸"; font-size:11px; }}
+  .twisty.open::before {{ content:"▾"; }}
+  .detail-row {{ display:none; }}
+  .detail-row.open {{ display:table-row; }}
+  .detail-row td {{ background:#fafafa; white-space:normal; overflow:visible; }}
+  .detail-content {{ margin:4px 0 4px 0; max-width:calc(100vw - 80px); overflow:auto; color:#555; }}
   .preview {{ overflow:auto; max-width:100%; }}
   table.mini {{ margin:6px 0 12px; font-size:13px; table-layout:auto; width:auto; min-width:55%; }}
   table.mini th, table.mini td {{ padding:5px 10px; }}
@@ -846,7 +856,18 @@ def render_html(input_file: str, kind: str, header: str, records: list[VarRecord
   pre {{ margin:6px 0; white-space:pre-wrap; }}
   .warn {{ margin:10px; padding:8px 10px; background:#fff4d9; border:1px solid #e1c57a; }}
   .muted {{ color:#666; margin:6px 0; }}
-</style></head>
+</style>
+<script>
+function toggleDetail(btn) {{
+  var id = btn.getAttribute("aria-controls");
+  var row = document.getElementById(id);
+  if (!row) return;
+  var open = !row.classList.contains("open");
+  row.classList.toggle("open", open);
+  btn.classList.toggle("open", open);
+  btn.setAttribute("aria-expanded", open ? "true" : "false");
+}}
+</script></head>
 <body>
   <div class="bar">Variables</div>
   <div class="tab">{html.escape(os.path.splitext(file_name)[0])}</div>
