@@ -21,7 +21,6 @@ MAX_STRUCT_DEPTH = 4
 MAX_RECORDS = 200
 MAX_TABLE_PREVIEW_ROWS = 5
 MAX_TABLE_PREVIEW_COLS = 40
-MAX_RENDER_PREVIEW_COLS = 6
 KNOWN_MATLAB_CLASSES = {
     "double", "single",
     "int8", "int16", "int32", "int64",
@@ -764,57 +763,34 @@ def render_html(input_file: str, kind: str, header: str, records: list[VarRecord
             return r.summary
         return f"{semantic_size(r)} {semantic_type(r)}".strip()
 
-    def item_preview(r: VarRecord) -> str:
-        if r.table_data is not None:
-            return render_table_preview(r.table_data)
-        return r.preview_html
+    def column_class(dtype: str) -> str:
+        dtype_l = dtype.lower()
+        if dtype_l == "float64":
+            return "double"
+        if dtype_l == "float32":
+            return "single"
+        if dtype_l.startswith("int") or dtype_l.startswith("uint"):
+            return dtype_l
+        if dtype_l in ("bool", "bool_"):
+            return "logical"
+        return dtype
 
-    def render_table_preview(td: TableData) -> str:
-        visible_cols = td.columns[:MAX_RENDER_PREVIEW_COLS]
-        col_head = "".join(f"<th>{html.escape(c.name)}</th>" for c in visible_cols)
-        row_count = min(MAX_TABLE_PREVIEW_ROWS, max((len(c.first) for c in visible_cols), default=0))
-        body_rows = []
-        for row_idx in range(row_count):
-            cells = []
-            for col in visible_cols:
-                value = col.first[row_idx] if row_idx < len(col.first) else ""
-                is_numeric = isinstance(value, (int, float, complex))
-                text_value = fmt_value(value)
-                cls_name = "num" if is_numeric else "text-cell"
-                if text_value in ("NaN", "Inf", "-Inf", ""):
-                    cls_name += " muted-value"
-                cls = f" class='{cls_name}'"
-                cells.append(f"<td{cls}>{html.escape(text_value)}</td>")
-            body_rows.append("<tr>" + "".join(cells) + "</tr>")
-
-        col_rows = "".join(
-            f"<tr><td>{html.escape(c.name)}</td>"
-            f"<td>{html.escape(c.dtype)}</td>"
-            f"<td class='num'>{c.n_rows}</td>"
-            f"<td class='num'>{c.n_nan}</td>"
-            f"<td class='num'>{html.escape(fmt_num(c.vmin))}</td>"
-            f"<td class='num'>{html.escape(fmt_num(c.vmax))}</td></tr>"
-            for c in td.columns
-        )
-        note = f"<div class='table-note'>Showing first {row_count} rows"
-        if td.n_cols > len(visible_cols):
-            note += f" and first {len(visible_cols)} of {td.n_cols} columns"
-        note += ".</div>"
-        columns_text = ", ".join(c.name for c in td.columns)
-
-        return (
-            "<div class='preview-block'>"
-            f"<div class='columns-line'>Columns: {html.escape(columns_text)}</div>"
-            f"{note}"
-            "<div class='table-scroll'><table class='data-table'><thead><tr>" + col_head + "</tr></thead>"
-            "<tbody>" + "".join(body_rows) + "</tbody></table></div>"
-            "<details class='stats-detail'><summary>Show column statistics</summary>"
-            "<div class='table-scroll'><table class='data-table columns'><thead><tr>"
-            "<th>Column</th><th>Type</th><th class='num'>Rows</th>"
-            "<th class='num'>NaN</th><th class='num'>Min</th><th class='num'>Max</th></tr></thead>"
-            f"<tbody>{col_rows}</tbody></table></div></details>"
-            "</div>"
-        )
+    def table_child_rows(td: TableData, row_id: str, indent: int) -> str:
+        rows_html = []
+        child_indent = indent + 22
+        for col in td.columns:
+            cls_name = column_class(col.dtype)
+            size = f"{col.n_rows} x 1"
+            value = f"{size} {cls_name}"
+            rows_html.append(
+                f"<tr class='child-row' data-parent='{row_id}'>"
+                f"<td class='field child-field' style='padding-left:{child_indent}px'>"
+                f"<span class='column-icon'></span>{html.escape(col.name)}</td>"
+                f"<td class='value'>{html.escape(value)}</td>"
+                f"<td>{html.escape(size)}</td>"
+                f"<td>{html.escape(cls_name)}</td></tr>"
+            )
+        return "".join(rows_html)
 
     rows = []
     for idx, r in enumerate(records):
@@ -822,14 +798,13 @@ def render_html(input_file: str, kind: str, header: str, records: list[VarRecord
         if depth > 1:
             continue
         field_name = r.name.split(".")[-1]
-        preview = item_preview(r)
-        has_preview = bool(preview)
+        has_children = bool(r.table_data and r.table_data.columns)
         indent = 16 + depth * 22
-        row_id = f"preview-{idx}"
+        row_id = f"children-{idx}"
         arrow = (
             f"<button class='twisty' aria-expanded='false' aria-controls='{row_id}' "
-            f"onclick='togglePreview(this)'></button>"
-            if has_preview else "<span class='spacer'></span>"
+            f"onclick='toggleChildren(this)'></button>"
+            if has_children else "<span class='spacer'></span>"
         )
         rows.append(
             f"<tr><td class='field' style='padding-left:{indent}px'>{arrow}{html.escape(field_name)}</td>"
@@ -837,11 +812,8 @@ def render_html(input_file: str, kind: str, header: str, records: list[VarRecord
             f"<td>{html.escape(semantic_size(r))}</td>"
             f"<td>{html.escape(semantic_type(r))}</td></tr>"
         )
-        if has_preview:
-            rows.append(
-                f"<tr id='{row_id}' class='preview-row'><td colspan='4' style='padding-left:{indent + 22}px'>"
-                f"{preview}</td></tr>"
-            )
+        if has_children and r.table_data is not None:
+            rows.append(table_child_rows(r.table_data, row_id, indent))
 
     variables_html = (
         "<table class='variables-table'><thead><tr>"
@@ -887,32 +859,26 @@ def render_html(input_file: str, kind: str, header: str, records: list[VarRecord
   .twisty {{ border:0; padding:0; margin:0; background:transparent; color:var(--muted); cursor:pointer; vertical-align:1px; font:inherit; }}
   .twisty::before {{ content:"▸"; font-size:11px; }}
   .twisty.open::before {{ content:"▾"; }}
-  .preview-row {{ display:none; }}
-  .preview-row.open {{ display:table-row; }}
-  .preview-row td {{ background:var(--soft); white-space:normal; overflow:visible; }}
-  .preview-block {{ padding:8px 0 10px; }}
-  .columns-line {{ color:var(--muted); margin:0 0 8px; font-family:Consolas, "Cascadia Mono", monospace; white-space:nowrap; overflow:auto; }}
-  .table-scroll {{ max-width:100%; overflow:auto; border:1px solid var(--line2); border-radius:6px; }}
-  .data-table {{ min-width:620px; font-size:13px; }}
-  .data-table th, .data-table td {{ padding:6px 9px; height:30px; }}
-  .data-table th {{ background:var(--head); }}
+  .child-row {{ display:none; }}
+  .child-row.open {{ display:table-row; }}
+  .child-row td {{ color:var(--muted); }}
+  .child-field {{ font-family:"Segoe UI", Arial, sans-serif; }}
+  .column-icon {{ display:inline-block; width:13px; height:13px; margin:0 7px 0 0; vertical-align:-2px; border:1px solid #1683d8; background:
+    linear-gradient(90deg, transparent 48%, #1683d8 48%, #1683d8 56%, transparent 56%),
+    linear-gradient(0deg, transparent 48%, #1683d8 48%, #1683d8 56%, transparent 56%),
+    #fff8bf; }}
   .num {{ text-align:right; font-variant-numeric:tabular-nums; }}
-  .text-cell {{ text-align:left; }}
-  .muted-value {{ color:#9aa4b2; }}
-  .table-note {{ color:var(--muted); font-size:12px; margin:-2px 0 7px; }}
-  .stats-detail {{ margin-top:10px; }}
-  .stats-detail > summary {{ cursor:pointer; color:var(--accent); font-size:13px; margin-bottom:8px; }}
   pre {{ margin:0; white-space:pre-wrap; font-family:Consolas, "Cascadia Mono", monospace; }}
   .warn {{ margin:8px 0; padding:8px 10px; background:#fff8e6; border:1px solid #edd38a; }}
   .muted {{ color:var(--muted); margin:0; padding:12px; }}
 </style>
 <script>
-function togglePreview(btn) {{
+function toggleChildren(btn) {{
   var id = btn.getAttribute("aria-controls");
-  var row = document.getElementById(id);
-  if (!row) return;
-  var open = !row.classList.contains("open");
-  row.classList.toggle("open", open);
+  var rows = document.querySelectorAll("tr[data-parent='" + id + "']");
+  if (!rows.length) return;
+  var open = !rows[0].classList.contains("open");
+  rows.forEach(function(row) {{ row.classList.toggle("open", open); }});
   btn.classList.toggle("open", open);
   btn.setAttribute("aria-expanded", open ? "true" : "false");
 }}
