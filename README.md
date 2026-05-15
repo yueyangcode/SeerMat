@@ -1,17 +1,19 @@
 # SeerMat
 
-SeerMat is a [Seer](https://1218.io/) plugin for previewing MATLAB `.mat` files as an HTML variable summary.
+SeerMat is a [Seer](https://1218.io/) plugin for previewing MATLAB `.mat` files as a lightweight MATLAB Workspace-style HTML view.
 
-It is useful when you want to quickly inspect a `.mat` file from File Explorer without opening MATLAB: variable names, MATLAB classes, shapes, dtypes, byte sizes, simple numeric ranges, struct fields, and selected table previews are rendered into a compact dark themed page.
+It is useful when you want to quickly inspect a `.mat` file from File Explorer without opening MATLAB. The preview focuses on the variable tree: root variables, struct fields, table sizes, and table column names. Large numeric contents are not expanded by default, keeping the preview fast and clean.
 
 ## Features
 
 - Preview MATLAB `.mat` files in Seer.
 - Supports classic MATLAB v6/v7 MAT-files through `scipy`.
 - Supports MATLAB v7.3 HDF5 MAT-files through `h5py`.
-- Expands small scalar structs recursively.
-- Shows quick summaries for numeric, complex, char, cell, struct, and logical values.
-- Attempts to decode MATLAB table-like data in v7.3 files.
+- Shows a MATLAB Workspace-like variable table.
+- Expands scalar structs as a field tree.
+- Decodes MATLAB table-like data in v7.3 files and shows table columns as child rows.
+- Keeps struct rows lightweight instead of rendering raw data values.
+- Follows the system light/dark theme.
 - Writes readable error pages when Python or a dependency is missing.
 
 ## Requirements
@@ -39,6 +41,16 @@ pip install numpy scipy h5py
 3. Copy the plugin folder into your Seer plugins directory, or install it through Seer's plugin manager if you package it as a Seer plugin archive.
 4. Restart Seer.
 5. Select a `.mat` file in File Explorer and press the Seer preview hotkey.
+
+## Cache Notes
+
+After updating the plugin, restart Seer before previewing files again. If Seer still shows an old preview layout for the same `.mat` file, clear Seer's temporary HTML cache:
+
+```powershell
+Get-ChildItem "$env:TEMP\Seer" -Filter *.html -ErrorAction SilentlyContinue | Remove-Item -Force
+```
+
+Then close the old preview window and preview the file again.
 
 ## Files
 
@@ -73,7 +85,7 @@ Then open `preview.html` in a browser to inspect the generated preview.
 ## Limitations
 
 - Very large or deeply nested objects are summarized instead of fully expanded.
-- MATLAB opaque objects, custom classes, and some table internals may only show partial metadata.
+- MATLAB opaque objects, custom classes, and old-style table internals may only show partial metadata.
 - The plugin is designed for quick preview, not full MAT-file conversion.
 
 ## License
