@@ -4,6 +4,16 @@ SeerMat is a [Seer](https://1218.io/) plugin for previewing MATLAB `.mat` and `.
 
 It is useful when you want to quickly inspect a MATLAB file from File Explorer without opening MATLAB. The preview focuses on the variable tree: root variables, struct fields, table sizes, and table column names. Large numeric contents are not expanded by default, keeping the preview fast and clean.
 
+## Screenshots
+
+MAT-file workspace preview:
+
+![MAT-file preview](assets/mat-preview.png)
+
+FIG image preview:
+
+![FIG preview](assets/fig-preview.png)
+
 ## Features
 
 - Preview MATLAB `.mat` and `.fig` files in Seer.
@@ -101,3 +111,7 @@ Then open `preview.html` in a browser to inspect the generated preview.
 ## License
 
 No license has been specified yet. Add one before distributing the plugin publicly.
+
+## Acknowledgements
+
+Thanks to [Seer](https://1218.io/) for providing the quick preview platform that makes this plugin possible.
