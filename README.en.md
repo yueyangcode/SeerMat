@@ -11,7 +11,7 @@
 ![Seer](https://img.shields.io/badge/Seer-4.1.3%2B-0b78d0)
 ![Python](https://img.shields.io/badge/Python-3.x-3776ab)
 ![formats](https://img.shields.io/badge/formats-.mat%20%7C%20.fig-22a06b)
-![license](https://img.shields.io/badge/license-not%20specified-lightgrey)
+![license](https://img.shields.io/badge/license-GPL--3.0-green)
 
 </div>
 
@@ -90,6 +90,10 @@ If the `.fig` file size or modified time changes, SeerMat renders it again autom
 - Very large or deeply nested objects are summarized to avoid freezing Seer.
 - MATLAB opaque objects, custom classes, and old table internals may only show partial metadata.
 - `.fig` image rendering requires MATLAB; if MATLAB is unavailable, SeerMat falls back to the stored graphics-object structure.
+
+## License
+
+This project is licensed under the [GNU General Public License v3.0](LICENSE).
 
 ## Acknowledgements
 

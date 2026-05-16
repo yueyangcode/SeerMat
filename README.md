@@ -11,7 +11,7 @@
 ![Seer](https://img.shields.io/badge/Seer-4.1.3%2B-0b78d0)
 ![Python](https://img.shields.io/badge/Python-3.x-3776ab)
 ![formats](https://img.shields.io/badge/formats-.mat%20%7C%20.fig-22a06b)
-![license](https://img.shields.io/badge/license-not%20specified-lightgrey)
+![license](https://img.shields.io/badge/license-GPL--3.0-green)
 
 </div>
 
@@ -115,7 +115,7 @@ python .\mat_to_html.py path\to\input.mat preview.html
 
 ## 许可证
 
-暂未指定许可证。公开分发前建议补充明确的开源许可证。
+本项目采用 [GNU General Public License v3.0](LICENSE) 许可证。
 
 ## 致谢
 

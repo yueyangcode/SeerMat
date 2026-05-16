@@ -11,7 +11,7 @@
 ![Seer](https://img.shields.io/badge/Seer-4.1.3%2B-0b78d0)
 ![Python](https://img.shields.io/badge/Python-3.x-3776ab)
 ![formats](https://img.shields.io/badge/formats-.mat%20%7C%20.fig-22a06b)
-![license](https://img.shields.io/badge/license-not%20specified-lightgrey)
+![license](https://img.shields.io/badge/license-GPL--3.0-green)
 
 </div>
 
@@ -90,6 +90,10 @@ Get-ChildItem "$env:TEMP\Seer" -Filter *.html -ErrorAction SilentlyContinue | Re
 - 非常大或層級很深的物件會被摘要化，避免 Seer 卡住。
 - MATLAB opaque 物件、自訂類別和舊式 table 內部結構可能只能顯示部分中繼資料。
 - `.fig` 圖片渲染需要 MATLAB；如果 MATLAB 不可用，會回退到圖形物件結構預覽。
+
+## 授權
+
+本專案採用 [GNU General Public License v3.0](LICENSE) 授權。
 
 ## 致謝
 
