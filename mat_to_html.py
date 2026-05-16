@@ -6,6 +6,7 @@ from __future__ import annotations
 import html
 import os
 import base64
+import hashlib
 import shutil
 import subprocess
 import sys
@@ -89,8 +90,27 @@ def _matlab_string(value: str) -> str:
     return "'" + value.replace("'", "''") + "'"
 
 
+def _png_data_uri(png_path: str) -> str:
+    with open(png_path, "rb") as f:
+        encoded = base64.b64encode(f.read()).decode("ascii")
+    return f"data:image/png;base64,{encoded}"
+
+
+def _fig_cache_path(path: str) -> str:
+    stat = os.stat(path)
+    key = f"{os.path.abspath(path).lower()}|{stat.st_size}|{stat.st_mtime_ns}"
+    digest = hashlib.sha1(key.encode("utf-8", "surrogatepass")).hexdigest()
+    cache_dir = os.path.join(tempfile.gettempdir(), "SeerMat", "fig-cache")
+    os.makedirs(cache_dir, exist_ok=True)
+    return os.path.join(cache_dir, f"{digest}.png")
+
+
 def render_fig_png_data_uri(path: str, timeout_secs: int = 45) -> tuple[str, str]:
     """Render a MATLAB .fig file to a PNG data URI when MATLAB is available."""
+    cache_path = _fig_cache_path(path)
+    if os.path.exists(cache_path) and os.path.getsize(cache_path) > 0:
+        return _png_data_uri(cache_path), ""
+
     matlab = shutil.which("matlab")
     if not matlab:
         return "", "MATLAB executable not found on PATH."
@@ -131,9 +151,8 @@ def render_fig_png_data_uri(path: str, timeout_secs: int = 45) -> tuple[str, str
             details = (proc.stderr or proc.stdout or "MATLAB did not create a PNG.").strip()
             return "", details[-1200:]
 
-        with open(png_path, "rb") as f:
-            encoded = base64.b64encode(f.read()).decode("ascii")
-        return f"data:image/png;base64,{encoded}", ""
+        shutil.copyfile(png_path, cache_path)
+        return _png_data_uri(cache_path), ""
 
 
 def shape_str(shape) -> str:

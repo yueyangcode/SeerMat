@@ -59,7 +59,7 @@ Then close the old preview window and preview the file again.
 
 MATLAB `.fig` files store MATLAB graphics objects, not a simple bitmap. SeerMat tries to call MATLAB in the background and export the figure to a PNG for preview. If MATLAB is not installed, not on `PATH`, or the figure cannot be rendered headlessly, the plugin still shows the stored figure object structure.
 
-The first `.fig` preview may take longer because MATLAB has to start.
+The first `.fig` preview may take longer because MATLAB has to start. Rendered PNG files are cached under `%TEMP%\SeerMat\fig-cache`, so previewing the same unchanged `.fig` again is much faster. If the `.fig` file size or modified time changes, the image is rendered again automatically.
 
 ## Files
 
