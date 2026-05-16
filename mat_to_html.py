@@ -827,7 +827,11 @@ def render_html(input_file: str, kind: str, header: str, records: list[VarRecord
         if error else ""
     )
     generated = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    kind_label = "MATLAB v7.3" if kind == "v7.3" else ("MATLAB v6/v7" if kind == "v6/v7" else "MAT-file")
+    is_fig = os.path.splitext(file_name)[1].lower() == ".fig"
+    if is_fig:
+        kind_label = "MATLAB FIG (v7.3)" if kind == "v7.3" else "MATLAB FIG"
+    else:
+        kind_label = "MATLAB v7.3" if kind == "v7.3" else ("MATLAB v6/v7" if kind == "v6/v7" else "MAT-file")
     table_count = sum(1 for r in records if "." in r.name and semantic_type(r) == "table")
 
     return f"""<!DOCTYPE html>

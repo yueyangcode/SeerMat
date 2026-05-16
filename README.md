@@ -1,14 +1,15 @@
 # SeerMat
 
-SeerMat is a [Seer](https://1218.io/) plugin for previewing MATLAB `.mat` files as a lightweight MATLAB Workspace-style HTML view.
+SeerMat is a [Seer](https://1218.io/) plugin for previewing MATLAB `.mat` and `.fig` files as a lightweight MATLAB Workspace-style HTML view.
 
-It is useful when you want to quickly inspect a `.mat` file from File Explorer without opening MATLAB. The preview focuses on the variable tree: root variables, struct fields, table sizes, and table column names. Large numeric contents are not expanded by default, keeping the preview fast and clean.
+It is useful when you want to quickly inspect a MATLAB file from File Explorer without opening MATLAB. The preview focuses on the variable tree: root variables, struct fields, table sizes, and table column names. Large numeric contents are not expanded by default, keeping the preview fast and clean.
 
 ## Features
 
-- Preview MATLAB `.mat` files in Seer.
+- Preview MATLAB `.mat` and `.fig` files in Seer.
 - Supports classic MATLAB v6/v7 MAT-files through `scipy`.
 - Supports MATLAB v7.3 HDF5 MAT-files through `h5py`.
+- Reads MATLAB `.fig` files as MAT-file containers and shows their graphics object structure.
 - Shows a MATLAB Workspace-like variable table.
 - Expands scalar structs as a field tree.
 - Decodes MATLAB table-like data in v7.3 files and shows table columns as child rows.
@@ -40,7 +41,7 @@ pip install numpy scipy h5py
 
 3. Copy the plugin folder into your Seer plugins directory, or install it through Seer's plugin manager if you package it as a Seer plugin archive.
 4. Restart Seer.
-5. Select a `.mat` file in File Explorer and press the Seer preview hotkey.
+5. Select a `.mat` or `.fig` file in File Explorer and press the Seer preview hotkey.
 
 ## Cache Notes
 
@@ -63,7 +64,7 @@ template/       Reserved for future template assets
 
 ## How It Works
 
-Seer calls `entry.ps1` with the input `.mat` file and target output path. The script locates Python, runs `mat_to_html.py`, and writes an HTML file for Seer to display.
+Seer calls `entry.ps1` with the input `.mat` or `.fig` file and target output path. The script locates Python, runs `mat_to_html.py`, and writes an HTML file for Seer to display.
 
 `mat_to_html.py` detects the MAT-file type:
 
@@ -86,6 +87,7 @@ Then open `preview.html` in a browser to inspect the generated preview.
 
 - Very large or deeply nested objects are summarized instead of fully expanded.
 - MATLAB opaque objects, custom classes, and old-style table internals may only show partial metadata.
+- `.fig` support previews the stored MATLAB graphics-object structure; it does not render the figure as an image.
 - The plugin is designed for quick preview, not full MAT-file conversion.
 
 ## License
