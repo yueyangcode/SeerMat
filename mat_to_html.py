@@ -868,19 +868,31 @@ def render_html(input_file: str, kind: str, header: str, records: list[VarRecord
         return "".join(rows_html)
 
     rows = []
+    simple_preview_count = sum(
+        1 for r in records
+        if "." not in r.name and r.preview_html and r.table_data is None and r.matlab_class != "struct"
+    )
     for idx, r in enumerate(records):
         depth = r.name.count(".")
         if depth > 1:
             continue
         field_name = r.name.split(".")[-1]
         has_children = bool(r.table_data and r.table_data.columns)
+        has_value_preview = bool(
+            r.preview_html and r.table_data is None and r.matlab_class != "struct"
+        )
+        auto_open = has_value_preview and simple_preview_count <= 3
         indent = 16 + depth * 22
         row_id = f"children-{idx}"
-        arrow = (
-            f"<button class='twisty' aria-expanded='false' aria-controls='{row_id}' "
-            f"onclick='toggleChildren(this)'></button>"
-            if has_children else "<span class='spacer'></span>"
-        )
+        if has_children or has_value_preview:
+            open_class = " open" if auto_open else ""
+            expanded = "true" if auto_open else "false"
+            arrow = (
+                f"<button class='twisty{open_class}' aria-expanded='{expanded}' "
+                f"aria-controls='{row_id}' onclick='toggleChildren(this)'></button>"
+            )
+        else:
+            arrow = "<span class='spacer'></span>"
         rows.append(
             f"<tr><td class='field' style='padding-left:{indent}px'>{arrow}{html.escape(field_name)}</td>"
             f"<td class='value'>{html.escape(matlab_value(r))}</td>"
@@ -889,6 +901,12 @@ def render_html(input_file: str, kind: str, header: str, records: list[VarRecord
         )
         if has_children and r.table_data is not None:
             rows.append(table_child_rows(r.table_data, row_id, indent))
+        elif has_value_preview:
+            open_class = " open" if auto_open else ""
+            rows.append(
+                f"<tr class='preview-row{open_class}' data-parent='{row_id}'>"
+                f"<td colspan='4' style='padding-left:{indent + 22}px'>{r.preview_html}</td></tr>"
+            )
 
     notice = (
         f"<div class='warn'><b>Could not parse:</b><pre>{html.escape(error)}</pre></div>"
@@ -958,6 +976,13 @@ def render_html(input_file: str, kind: str, header: str, records: list[VarRecord
   .child-row {{ display:none; }}
   .child-row.open {{ display:table-row; }}
   .child-row td {{ color:var(--muted); }}
+  .preview-row {{ display:none; }}
+  .preview-row.open {{ display:table-row; }}
+  .preview-row td {{ background:var(--soft); white-space:normal; overflow:visible; }}
+  .submeta {{ color:var(--muted); margin:2px 0 8px; }}
+  .mini {{ width:auto; min-width:360px; max-width:720px; border:1px solid var(--line2); }}
+  .mini th, .mini td {{ padding:6px 10px; height:28px; }}
+  .mini .r {{ text-align:right; width:72px; color:var(--muted); font-variant-numeric:tabular-nums; }}
   .child-field {{ font-family:"Segoe UI", Arial, sans-serif; }}
   .column-icon {{ display:inline-block; width:13px; height:13px; margin:0 7px 0 0; vertical-align:-2px; border:1px solid #1683d8; background:
     linear-gradient(90deg, transparent 48%, #1683d8 48%, #1683d8 56%, transparent 56%),
