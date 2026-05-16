@@ -5,7 +5,11 @@ from __future__ import annotations
 
 import html
 import os
+import base64
+import shutil
+import subprocess
 import sys
+import tempfile
 import time
 import traceback
 from dataclasses import dataclass
@@ -79,6 +83,57 @@ def detect_mat_kind(path: str) -> str:
     if head[:6] == b"MATLAB" and b"5.0 MAT-file" in head:
         return "v6/v7"
     return "unknown"
+
+
+def _matlab_string(value: str) -> str:
+    return "'" + value.replace("'", "''") + "'"
+
+
+def render_fig_png_data_uri(path: str, timeout_secs: int = 45) -> tuple[str, str]:
+    """Render a MATLAB .fig file to a PNG data URI when MATLAB is available."""
+    matlab = shutil.which("matlab")
+    if not matlab:
+        return "", "MATLAB executable not found on PATH."
+
+    with tempfile.TemporaryDirectory(prefix="seer_fig_") as tmp:
+        png_path = os.path.join(tmp, "figure.png")
+        fig_arg = _matlab_string(os.path.abspath(path))
+        png_arg = _matlab_string(png_path)
+        command = (
+            "try; "
+            "set(groot,'defaultFigureVisible','off'); "
+            f"h=openfig({fig_arg},'invisible'); "
+            "set(h,'Color','w'); "
+            f"try; exportgraphics(h,{png_arg},'Resolution',150); "
+            f"catch; print(h,{png_arg},'-dpng','-r150'); end; "
+            "close(h); "
+            "catch ME; disp(getReport(ME,'extended','hyperlinks','off')); exit(1); end; "
+            "exit(0);"
+        )
+        try:
+            proc = subprocess.run(
+                [matlab, "-batch", command],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=timeout_secs,
+                check=False,
+                creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
+            )
+        except subprocess.TimeoutExpired:
+            return "", f"MATLAB figure rendering timed out after {timeout_secs} seconds."
+        except Exception as exc:
+            return "", f"MATLAB figure rendering failed: {exc}"
+
+        if proc.returncode != 0 or not os.path.exists(png_path):
+            details = (proc.stderr or proc.stdout or "MATLAB did not create a PNG.").strip()
+            return "", details[-1200:]
+
+        with open(png_path, "rb") as f:
+            encoded = base64.b64encode(f.read()).decode("ascii")
+        return f"data:image/png;base64,{encoded}", ""
 
 
 def shape_str(shape) -> str:
@@ -722,7 +777,8 @@ def records_from_h5py(path: str) -> tuple[list[VarRecord], str]:
 # ---------------------------------------------------------------------------
 
 def render_html(input_file: str, kind: str, header: str, records: list[VarRecord],
-                error: Optional[str], load_secs: float) -> str:
+                error: Optional[str], load_secs: float, fig_image_uri: str = "",
+                fig_render_error: str = "") -> str:
     file_name = os.path.basename(input_file)
     file_size = os.path.getsize(input_file) if os.path.exists(input_file) else 0
     root_count = sum(1 for r in records if "." not in r.name)
@@ -826,6 +882,18 @@ def render_html(input_file: str, kind: str, header: str, records: list[VarRecord
         f"<div class='warn'><b>Could not parse:</b><pre>{html.escape(error)}</pre></div>"
         if error else ""
     )
+    fig_preview = ""
+    if fig_image_uri:
+        fig_preview = (
+            "<section class='figure-preview'>"
+            f"<img src='{fig_image_uri}' alt='Rendered MATLAB figure'>"
+            "</section>"
+        )
+    elif fig_render_error:
+        fig_preview = (
+            "<div class='warn'><b>Could not render figure image.</b>"
+            f"<pre>{html.escape(fig_render_error)}</pre></div>"
+        )
     generated = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     is_fig = os.path.splitext(file_name)[1].lower() == ".fig"
     if is_fig:
@@ -849,6 +917,8 @@ def render_html(input_file: str, kind: str, header: str, records: list[VarRecord
   .meta {{ color:var(--muted); display:flex; flex-wrap:wrap; gap:6px 12px; font-size:13px; }}
   .meta span:not(:last-child)::after {{ content:"·"; margin-left:14px; color:#aab3bd; }}
   .workspace {{ background:var(--panel); border:1px solid var(--line); overflow:auto; }}
+  .figure-preview {{ background:var(--panel); border:1px solid var(--line); margin:0 0 12px; padding:10px; overflow:auto; text-align:center; }}
+  .figure-preview img {{ display:inline-block; max-width:100%; height:auto; background:#fff; }}
   table {{ border-collapse:separate; border-spacing:0; width:100%; }}
   th, td {{ border-bottom:1px solid var(--line2); padding:8px 12px; text-align:left; vertical-align:middle; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }}
   th {{ position:sticky; top:0; background:var(--head); color:var(--text); font-weight:650; z-index:1; }}
@@ -902,6 +972,7 @@ function toggleChildren(btn) {{
       </div>
     </header>
     {notice}
+    {fig_preview}
     <section class="workspace">
       {variables_html}
     </section>
@@ -926,12 +997,16 @@ def main() -> int:
     records: list[VarRecord] = []
     header = ""
     kind = "unknown"
+    fig_image_uri = ""
+    fig_render_error = ""
     t0 = time.perf_counter()
 
     try:
         if not os.path.exists(input_file):
             raise FileNotFoundError(input_file)
         kind = detect_mat_kind(input_file)
+        if os.path.splitext(input_file)[1].lower() == ".fig":
+            fig_image_uri, fig_render_error = render_fig_png_data_uri(input_file)
         if kind == "v7.3":
             records, header = records_from_h5py(input_file)
         else:
@@ -952,7 +1027,10 @@ def main() -> int:
     except Exception:
         error = traceback.format_exc()
 
-    page = render_html(input_file, kind, header, records, error, time.perf_counter() - t0)
+    page = render_html(
+        input_file, kind, header, records, error, time.perf_counter() - t0,
+        fig_image_uri, fig_render_error
+    )
     with open(output_html, "w", encoding="utf-8-sig") as f:
         f.write(page)
     return 0

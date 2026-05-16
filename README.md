@@ -9,7 +9,8 @@ It is useful when you want to quickly inspect a MATLAB file from File Explorer w
 - Preview MATLAB `.mat` and `.fig` files in Seer.
 - Supports classic MATLAB v6/v7 MAT-files through `scipy`.
 - Supports MATLAB v7.3 HDF5 MAT-files through `h5py`.
-- Reads MATLAB `.fig` files as MAT-file containers and shows their graphics object structure.
+- Renders MATLAB `.fig` files to an embedded PNG when MATLAB is available.
+- Falls back to the stored graphics-object structure when `.fig` rendering is unavailable.
 - Shows a MATLAB Workspace-like variable table.
 - Expands scalar structs as a field tree.
 - Decodes MATLAB table-like data in v7.3 files and shows table columns as child rows.
@@ -22,6 +23,7 @@ It is useful when you want to quickly inspect a MATLAB file from File Explorer w
 - Windows
 - Seer `4.1.3` or newer
 - Python 3 available on `PATH`
+- MATLAB on `PATH` is optional, but required for rendered `.fig` image previews.
 - Python packages:
 
 ```powershell
@@ -52,6 +54,12 @@ Get-ChildItem "$env:TEMP\Seer" -Filter *.html -ErrorAction SilentlyContinue | Re
 ```
 
 Then close the old preview window and preview the file again.
+
+## FIG Preview Notes
+
+MATLAB `.fig` files store MATLAB graphics objects, not a simple bitmap. SeerMat tries to call MATLAB in the background and export the figure to a PNG for preview. If MATLAB is not installed, not on `PATH`, or the figure cannot be rendered headlessly, the plugin still shows the stored figure object structure.
+
+The first `.fig` preview may take longer because MATLAB has to start.
 
 ## Files
 
@@ -87,7 +95,7 @@ Then open `preview.html` in a browser to inspect the generated preview.
 
 - Very large or deeply nested objects are summarized instead of fully expanded.
 - MATLAB opaque objects, custom classes, and old-style table internals may only show partial metadata.
-- `.fig` support previews the stored MATLAB graphics-object structure; it does not render the figure as an image.
+- `.fig` image rendering requires MATLAB and may be slower than `.mat` structure previews.
 - The plugin is designed for quick preview, not full MAT-file conversion.
 
 ## License
