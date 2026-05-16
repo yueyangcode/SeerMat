@@ -890,18 +890,12 @@ def render_html(input_file: str, kind: str, header: str, records: list[VarRecord
         if has_children and r.table_data is not None:
             rows.append(table_child_rows(r.table_data, row_id, indent))
 
-    variables_html = (
-        "<table class='variables-table'><thead><tr>"
-        "<th>Name</th><th>Value</th><th>Size</th><th>Class</th>"
-        "</tr></thead><tbody>" + "".join(rows) + "</tbody></table>"
-        if records else "<p class='muted'>(no user variables)</p>"
-    )
-
     notice = (
         f"<div class='warn'><b>Could not parse:</b><pre>{html.escape(error)}</pre></div>"
         if error else ""
     )
     fig_preview = ""
+    is_fig = os.path.splitext(file_name)[1].lower() == ".fig"
     if fig_image_uri:
         fig_preview = (
             "<section class='figure-preview'>"
@@ -913,8 +907,17 @@ def render_html(input_file: str, kind: str, header: str, records: list[VarRecord
             "<div class='warn'><b>Could not render figure image.</b>"
             f"<pre>{html.escape(fig_render_error)}</pre></div>"
         )
+    show_variables = not (is_fig and fig_image_uri)
+    variables_html = ""
+    if show_variables:
+        variables_html = (
+            "<table class='variables-table'><thead><tr>"
+            "<th>Name</th><th>Value</th><th>Size</th><th>Class</th>"
+            "</tr></thead><tbody>" + "".join(rows) + "</tbody></table>"
+            if records else "<p class='muted'>(no user variables)</p>"
+        )
+    workspace_html = f"<section class='workspace'>{variables_html}</section>" if show_variables else ""
     generated = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    is_fig = os.path.splitext(file_name)[1].lower() == ".fig"
     if is_fig:
         kind_label = "MATLAB FIG (v7.3)" if kind == "v7.3" else "MATLAB FIG"
     else:
@@ -992,9 +995,7 @@ function toggleChildren(btn) {{
     </header>
     {notice}
     {fig_preview}
-    <section class="workspace">
-      {variables_html}
-    </section>
+    {workspace_html}
   </main>
 </body></html>
 """
