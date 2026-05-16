@@ -1,117 +1,122 @@
+<div align="center">
+
 # SeerMat
 
-SeerMat is a [Seer](https://1218.io/) plugin for previewing MATLAB `.mat` and `.fig` files as a lightweight MATLAB Workspace-style HTML view.
+**用于 [Seer](https://1218.io/) 的 MATLAB `.mat` / `.fig` 快速预览插件。**
 
-It is useful when you want to quickly inspect a MATLAB file from File Explorer without opening MATLAB. The preview focuses on the variable tree: root variables, struct fields, table sizes, and table column names. Large numeric contents are not expanded by default, keeping the preview fast and clean.
+[中文](README.md) · [繁體中文](README.zh-TW.md) · [English](README.en.md)
 
-## Screenshots
+![release](https://img.shields.io/badge/release-v1.1.0-blue)
+![platform](https://img.shields.io/badge/platform-Windows-lightgrey)
+![Seer](https://img.shields.io/badge/Seer-4.1.3%2B-0b78d0)
+![Python](https://img.shields.io/badge/Python-3.x-3776ab)
+![formats](https://img.shields.io/badge/formats-.mat%20%7C%20.fig-22a06b)
+![license](https://img.shields.io/badge/license-not%20specified-lightgrey)
 
-MAT-file workspace preview:
+</div>
+
+SeerMat 可以在资源管理器中直接预览 MATLAB 文件，不必打开 MATLAB。它重点展示用户真正关心的内容：变量结构、struct 字段、table 行列信息、table 列名，以及 `.fig` 图像预览。
+
+## 预览效果
+
+MAT 文件变量结构：
 
 ![MAT-file preview](assets/mat-preview.png)
 
-FIG image preview:
+FIG 图像预览：
 
 ![FIG preview](assets/fig-preview.png)
 
-## Features
+## 功能特性
 
-- Preview MATLAB `.mat` and `.fig` files in Seer.
-- Supports classic MATLAB v6/v7 MAT-files through `scipy`.
-- Supports MATLAB v7.3 HDF5 MAT-files through `h5py`.
-- Renders MATLAB `.fig` files to an embedded PNG when MATLAB is available.
-- Falls back to the stored graphics-object structure when `.fig` rendering is unavailable.
-- Shows a MATLAB Workspace-like variable table.
-- Expands scalar structs as a field tree.
-- Decodes MATLAB table-like data in v7.3 files and shows table columns as child rows.
-- Keeps struct rows lightweight instead of rendering raw data values.
-- Follows the system light/dark theme.
-- Writes readable error pages when Python or a dependency is missing.
+- 支持在 [Seer](https://1218.io/) 中预览 MATLAB `.mat` 和 `.fig` 文件。
+- 支持 MATLAB v6/v7 MAT-file，基于 `scipy` 读取。
+- 支持 MATLAB v7.3 HDF5 MAT-file，基于 `h5py` 读取。
+- 尽量还原 MATLAB 语义，而不是直接显示 HDF5 内部引用编号。
+- `struct` 显示为字段树。
+- v7.3 `table` 显示真实行列数，并可展开为列字段列表。
+- 普通 numeric / char / string 变量可显示轻量数据预览。
+- `.fig` 文件在 MATLAB 可用时渲染为图片预览。
+- `.fig` 渲染结果会缓存，重复预览同一个未修改文件会更快。
+- 支持系统浅色 / 深色主题。
 
-## Requirements
+## 依赖
 
 - Windows
-- Seer `4.1.3` or newer
-- Python 3 available on `PATH`
-- MATLAB on `PATH` is optional, but required for rendered `.fig` image previews.
-- Python packages:
+- [Seer](https://1218.io/) `4.1.3` 或更新版本
+- Python 3，需要在 `PATH` 中可用
+- Python 包：
 
 ```powershell
 pip install numpy scipy h5py
 ```
 
-If `python` is not available, the plugin will also try the Windows `py -3` launcher.
+可选：
 
-## Installation
+- MATLAB，需要在 `PATH` 中可用；只有渲染 `.fig` 图片预览时需要。
 
-1. Download or clone this repository.
-2. Make sure Python dependencies are installed:
+如果系统没有 `python` 命令，插件也会尝试使用 Windows 的 `py -3` 启动器。
+
+## 安装
+
+1. 下载或克隆本仓库。
+2. 安装 Python 依赖：
 
 ```powershell
 pip install numpy scipy h5py
 ```
 
-3. Copy the plugin folder into your Seer plugins directory, or install it through Seer's plugin manager if you package it as a Seer plugin archive.
-4. Restart Seer.
-5. Select a `.mat` or `.fig` file in File Explorer and press the Seer preview hotkey.
+3. 在 Seer 插件管理中添加本项目的 `plugin.json`。
+4. 重启 Seer。
+5. 在资源管理器中选中 `.mat` 或 `.fig` 文件，按 Seer 预览快捷键。
 
-## Cache Notes
+## 缓存说明
 
-After updating the plugin, restart Seer before previewing files again. If Seer still shows an old preview layout for the same `.mat` file, clear Seer's temporary HTML cache:
+更新插件后，请先重启 Seer。如果同一个 `.mat` 或 `.fig` 文件仍显示旧界面，可以清理 Seer 的临时 HTML 缓存：
 
 ```powershell
 Get-ChildItem "$env:TEMP\Seer" -Filter *.html -ErrorAction SilentlyContinue | Remove-Item -Force
 ```
 
-Then close the old preview window and preview the file again.
-
-## FIG Preview Notes
-
-MATLAB `.fig` files store MATLAB graphics objects, not a simple bitmap. SeerMat tries to call MATLAB in the background and export the figure to a PNG for preview. If MATLAB is not installed, not on `PATH`, or the figure cannot be rendered headlessly, the plugin still shows the stored figure object structure.
-
-The first `.fig` preview may take longer because MATLAB has to start. Rendered PNG files are cached under `%TEMP%\SeerMat\fig-cache`, so previewing the same unchanged `.fig` again is much faster. If the `.fig` file size or modified time changes, the image is rendered again automatically.
-
-## Files
+`.fig` 渲染出的 PNG 图片会缓存在：
 
 ```text
-plugin.json     Seer plugin manifest
-entry.ps1       PowerShell entry script called by Seer
-mat_to_html.py  MAT-file parser and HTML renderer
-template/       Reserved for future template assets
+%TEMP%\SeerMat\fig-cache
 ```
 
-## How It Works
+如果 `.fig` 文件大小或修改时间发生变化，插件会自动重新渲染。
 
-Seer calls `entry.ps1` with the input `.mat` or `.fig` file and target output path. The script locates Python, runs `mat_to_html.py`, and writes an HTML file for Seer to display.
+## 项目文件
 
-`mat_to_html.py` detects the MAT-file type:
+```text
+plugin.json     Seer 插件清单
+entry.ps1       Seer 调用的 PowerShell 入口
+mat_to_html.py  MAT / FIG 解析与 HTML 渲染脚本
+assets/         README 截图资源
+template/       预留模板目录
+```
 
-- v6/v7 files are loaded with `scipy.io.loadmat`.
-- v7.3 files are read with `h5py`.
+## 开发调试
 
-The renderer produces a single self-contained HTML page, so no extra frontend build step is required.
-
-## Development
-
-You can test the converter directly:
+可以直接运行转换脚本测试输出：
 
 ```powershell
 python .\mat_to_html.py path\to\input.mat preview.html
 ```
 
-Then open `preview.html` in a browser to inspect the generated preview.
+然后用浏览器打开 `preview.html` 查看结果。
 
-## Limitations
+## 限制
 
-- Very large or deeply nested objects are summarized instead of fully expanded.
-- MATLAB opaque objects, custom classes, and old-style table internals may only show partial metadata.
-- `.fig` image rendering requires MATLAB and may be slower than `.mat` structure previews.
-- The plugin is designed for quick preview, not full MAT-file conversion.
+- 插件面向快速预览，不是完整 MAT-file 转换器。
+- 非常大或层级很深的对象会被摘要化，避免 Seer 卡住。
+- MATLAB opaque 对象、自定义类和旧式 table 内部结构可能只能显示部分元数据。
+- `.fig` 图片渲染需要 MATLAB；如果 MATLAB 不可用，会回退到图形对象结构预览。
 
-## License
+## 许可证
 
-No license has been specified yet. Add one before distributing the plugin publicly.
+暂未指定许可证。公开分发前建议补充明确的开源许可证。
 
-## Acknowledgements
+## 致谢
 
-Thanks to [Seer](https://1218.io/) for providing the quick preview platform that makes this plugin possible.
+感谢 [Seer](https://1218.io/) 提供轻量、快速的文件预览平台，让这个 MATLAB 文件预览插件成为可能。
